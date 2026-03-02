@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>{{ report.description or report.name }} — Ledger — {{ company }}</title>
+<style>
+  @page { margin: 0.5in; size: letter landscape; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 9px; line-height: 1.4; color: #000; }
+  .hdr { text-align:center; margin-bottom:10px; }
+  .hdr h1 { font-size:12px; }
+  .hdr .sub { font-size:8px; color:#666; }
+  .acct-hdr { font-weight:700; font-size:10px; padding:8px 0 2px;
+    border-bottom:2px solid #000; margin-top:12px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:8px; }
+  th { text-align:left; font-size:8px; font-weight:700; text-transform:uppercase;
+    border-bottom:1px solid #999; padding:2px 3px; color:#444; }
+  th.r { text-align:right; }
+  td { padding:1px 3px; font-size:9px; }
+  td.r { text-align:right; }
+  .sub-tot { font-weight:700; border-top:1px solid #000; }
+  .foot { margin-top:12px; font-size:8px; color:#888; display:flex; justify-content:space-between; }
+  @media print { .no-print { display:none !important; } }
+</style>
+</head>
+<body>
+<div class="no-print" style="padding:8px;background:#eee;text-align:center;font-size:11px">
+  <button onclick="window.print()" style="font-size:12px;padding:4px 16px;cursor:pointer">Print</button>
+  &nbsp; Ctrl+P or ClawPDF to save as PDF
+</div>
+
+<div class="hdr">
+  <h1>{{ company }}</h1>
+  <div class="sub">{{ report.description or report.name }} — Ledger Detail
+    {% if begin or end %} — 
+      {% if begin %}{{ begin }}{% else %}Inception{% endif %}
+      to {{ end if end else 'Current' }}
+    {% endif %}
+  </div>
+</div>
+
+{% for acct in ledger_data %}
+<div class="acct-hdr">{{ acct.name }} — {{ acct.desc }}</div>
+{% if acct.entries %}
+<table>
+<thead><tr>
+  <th style="width:80px">Date</th>
+  <th style="width:60px">Ref</th>
+  <th>Description</th>
+  <th style="width:70px">Cross</th>
+  <th class="r" style="width:80px">Debit</th>
+  <th class="r" style="width:80px">Credit</th>
+  <th class="r" style="width:90px">Balance</th>
+</tr></thead>
+<tbody>
+{% for e in acct.entries %}
+<tr>
+  <td>{{ e.date }}</td>
+  <td>{{ e.reference }}</td>
+  <td>{{ e.description }}</td>
+  <td>{{ e.cross_accounts }}</td>
+  <td class="r">{% if e.amount > 0 %}{{ "%.2f"|format(e.amount/100) }}{% endif %}</td>
+  <td class="r">{% if e.amount < 0 %}{{ "%.2f"|format((-e.amount)/100) }}{% endif %}</td>
+  <td class="r">{{ "%.2f"|format(e.running_balance/100) }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+{% else %}
+<div style="padding:4px;color:#888;font-size:9px">No entries</div>
+{% endif %}
+{% endfor %}
+
+<div class="foot">
+  <span>{{ company }} — {{ report.description or report.name }}</span>
+  <span>Printed {{ now }}</span>
+</div>
+</body></html>

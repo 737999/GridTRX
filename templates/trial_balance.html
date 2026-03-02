@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Trial Balance{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>Trial Balance
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Trial Balance</h1>
+<p class="subtitle">{{ company }}{% if as_of %} — As of {{ as_of }}{% endif %}</p>
+
+<div class="toolbar">
+  <form method="get" style="display:flex; gap:6px; align-items:center;">
+    <label style="font-size:12px; margin:0;">As of date:</label>
+    <input type="text" name="as_of" value="{{ as_of }}" placeholder="yyyy-mm-dd" style="width:120px; padding:4px 6px; font-size:12px; font-family:var(--mono)">
+    <button type="submit" class="btn btn-sm">Update</button>
+    {% if as_of %}
+    <a href="{{ url_for('trial_balance') }}" class="btn btn-sm">Clear</a>
+    {% endif %}
+  </form>
+  <span class="spacer"></span>
+  <a href="{{ url_for('export_trial_balance') }}" class="btn btn-sm">Export CSV</a>
+  <button class="btn btn-sm" onclick="window.print()">Print</button>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:60px">#</th>
+      <th>Account</th>
+      <th>Description</th>
+      <th style="width:80px">Report</th>
+      <th class="num" style="width:120px">Debit</th>
+      <th class="num" style="width:120px">Credit</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for acct in accounts %}
+    <tr class="clickable" data-href="{{ url_for('account_ledger', account_id=acct.id) }}"
+        onclick="window.location=this.dataset.href">
+      <td style="color:var(--text-muted); font-family:var(--mono); font-size:12px">{{ acct.account_number }}</td>
+      <td><strong>{{ acct.name }}</strong></td>
+      <td style="color:var(--text-muted)">{{ acct.description }}</td>
+      <td style="color:var(--text-muted); font-size:12px">{{ acct.report_name }}</td>
+      <td class="num">{% if acct.debit %}{{ acct.debit|money }}{% endif %}</td>
+      <td class="num">{% if acct.credit %}{{ acct.credit|money }}{% endif %}</td>
+    </tr>
+    {% endfor %}
+    {% if not accounts %}
+    <tr>
+      <td colspan="6" style="text-align:center; padding:30px; color:var(--text-muted);">
+        No accounts with balances.
+      </td>
+    </tr>
+    {% endif %}
+  </tbody>
+  <tfoot>
+    <tr>
+      <td colspan="4"><strong>Totals</strong></td>
+      <td class="num">{{ total_dr|money }}</td>
+      <td class="num">{{ total_cr|money }}</td>
+    </tr>
+    <tr>
+      <td colspan="4"></td>
+      <td colspan="2" class="num" style="font-size:12px; color: {% if total_dr == total_cr %}var(--positive){% else %}var(--negative){% endif %}">
+        {% if total_dr == total_cr %}
+          ✓ In balance
+        {% else %}
+          ⚠ Out of balance by {{ (total_dr - total_cr)|money }}
+        {% endif %}
+      </td>
+    </tr>
+  </tfoot>
+</table>
+{% endblock %}

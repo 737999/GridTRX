@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+{% block title %}Options{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>Options</div>
+{% endblock %}
+{% block content %}
+<h1>Options</h1>
+<form method="post" style="max-width:440px;">
+  <div class="form-group"><label>Company Name</label>
+    <input type="text" name="company_name" value="{{ company }}"></div>
+  <div class="form-group"><label>Fiscal Year End (MM-DD)</label>
+    <input type="text" name="fiscal_year_end" value="{{ fye }}" placeholder="12-31" style="font-family:var(--mono);width:60px;display:inline-block">
+    <label style="margin-left:10px;font-size:11px;font-weight:600;color:var(--muted)">Year</label>
+    <input type="text" name="fiscal_year" value="{{ fy_year }}" placeholder="2025" style="font-family:var(--mono);width:60px;display:inline-block"></div>
+  <div class="form-group"><label>Lock Date (YYYY-MM-DD)</label>
+    <input type="text" name="lock_date" value="{{ lock_date }}" placeholder="yyyy-mm-dd" style="font-family:var(--mono)">
+    <p style="font-size:11.5px;color:var(--muted);margin-top:3px">No transactions on or before this date. Blank = no lock.</p></div>
+
+  <!-- F8/F9 GST Split Settings -->
+  <div style="margin-top:20px;padding:12px 14px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:6px;">
+    <h3 style="font-size:13px;font-weight:600;margin:0 0 10px;color:var(--accent)">F8 / F9 — Sales Tax Split</h3>
+    <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px">
+      F8 splits out tax paid on purchases (ITCs). F9 splits out tax collected on sales.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;max-width:500px">
+      <div class="form-group" style="margin-bottom:6px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">Tax Rate Numerator</label>
+        <input type="text" name="gst_rate_num" value="{{ gst_rate_num }}" style="font-family:var(--mono);width:50px" placeholder="5">
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">Tax Rate Denominator</label>
+        <input type="text" name="gst_rate_den" value="{{ gst_rate_den }}" style="font-family:var(--mono);width:50px" placeholder="105">
+      </div>
+    </div>
+    <p style="font-size:11px;color:var(--muted);margin:2px 0 12px">
+      Tax = gross &times; {{ gst_rate_num }} / {{ gst_rate_den }}. For 5% GST use 5/105. For 13% HST use 13/113.</p>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 16px;max-width:500px">
+      <div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">F8 — Purchases (ITCs)</div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label style="font-size:11px;font-weight:600;color:var(--muted)">Tax Account</label>
+          <select name="f8_tax_acct" style="font-size:12.5px;width:100%">
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f8_tax_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label style="font-size:11px;font-weight:600;color:var(--muted)">Default Posting Account</label>
+          <select name="f8_post_acct" style="font-size:12.5px;width:100%">
+            <option value="">EX.SUSP (default)</option>
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f8_post_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">F9 — Sales (Collected)</div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label style="font-size:11px;font-weight:600;color:var(--muted)">Tax Account</label>
+          <select name="f9_tax_acct" style="font-size:12.5px;width:100%">
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f9_tax_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label style="font-size:11px;font-weight:600;color:var(--muted)">Default Posting Account</label>
+          <select name="f9_post_acct" style="font-size:12.5px;width:100%">
+            <option value="">EX.SUSP (default)</option>
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f9_post_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stripe Deposit Procedure Settings -->
+  <div style="margin-top:20px;padding:12px 14px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:6px;">
+    <h3 style="font-size:13px;font-weight:600;margin:0 0 10px;color:var(--accent)">Stripe Deposit Procedure</h3>
+    <p style="font-size:11.5px;color:var(--muted);margin:0 0 10px">
+      The backslash procedure for posting Stripe deposits. Each charge line creates a compound entry: DR clearing (net), DR fees, CR customer AR (gross).</p>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;max-width:500px">
+      <div class="form-group" style="margin-bottom:6px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">Processing Fee Account</label>
+        <select name="stripe_fee_acct" style="font-size:12.5px;width:100%">
+          {% for a in accounts %}{% if a.account_type == 'posting' %}
+          <option value="{{ a.name }}" {% if a.name == stripe_fee_acct %}selected{% endif %}>{{ a.name }}</option>
+          {% endif %}{% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label style="font-size:11px;font-weight:600;color:var(--muted)">AR Report (for customer list)</label>
+        <select name="stripe_ar_report" style="font-size:12.5px;width:100%">
+          <option value="">— auto-detect —</option>
+          {% for r in reports %}
+          <option value="{{ r.name }}" {% if r.name == stripe_ar_report %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:16px"><button type="submit" class="btn btn-primary">Save</button></div>
+</form>
+
+<div style="margin-top:28px;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;">
+  <h2 style="font-size:14px;margin:0 0 10px">Appearance</h2>
+  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+    <input type="checkbox" id="darkToggle" onchange="toggleDark(this.checked)"
+      style="width:auto;accent-color:var(--accent)">
+    Dark mode
+  </label>
+</div>
+
+<!-- ── Export / Import ── -->
+<div style="margin-top:28px;padding:14px;background:var(--surface);border:1px solid var(--border);border-radius:6px;">
+  <h2 style="font-size:14px;margin:0 0 4px">Export / Import Books</h2>
+  <p style="font-size:12px;color:var(--muted);margin:0 0 14px">
+    Full backup &amp; restore. Export produces portable JSON files you can import into any Grid database.
+  </p>
+
+  <div style="display:flex;gap:24px;flex-wrap:wrap">
+    <!-- Export Column -->
+    <div style="flex:1;min-width:200px">
+      <h3 style="font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Export</h3>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <a href="/export/structure" class="btn" style="text-align:center;font-size:12.5px;text-decoration:none">
+          ⬇ Structure
+          <span style="display:block;font-size:10.5px;color:var(--muted);font-weight:400;margin-top:1px">Accounts, reports, rules, tax codes</span>
+        </a>
+        <a href="/export/data" class="btn" style="text-align:center;font-size:12.5px;text-decoration:none">
+          ⬇ Data
+          <span style="display:block;font-size:10.5px;color:var(--muted);font-weight:400;margin-top:1px">All transactions &amp; reconciled flags</span>
+        </a>
+      </div>
+    </div>
+
+    <!-- Import Column -->
+    <div style="flex:1;min-width:200px">
+      <h3 style="font-size:12.5px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Import</h3>
+      <form method="post" action="/import/structure" enctype="multipart/form-data"
+            style="margin-bottom:8px;padding:10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:5px;">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">① Structure (do this first)</label>
+        <input type="file" name="file" accept=".json" style="font-size:12px;width:100%" required>
+        <button type="submit" class="btn" style="margin-top:6px;font-size:12px;width:100%"
+                onclick="return confirm('This will REPLACE all accounts, reports, rules, and tax codes in the current file. Continue?')">
+          ⬆ Import Structure
+        </button>
+      </form>
+      <form method="post" action="/import/data" enctype="multipart/form-data"
+            style="padding:10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:5px;">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">② Data (after structure is in place)</label>
+        <input type="file" name="file" accept=".json" style="font-size:12px;width:100%" required>
+        <button type="submit" class="btn" style="margin-top:6px;font-size:12px;width:100%"
+                onclick="return confirm('This will import all transactions into the current file. Continue?')">
+          ⬆ Import Data
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;padding:8px 10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:4px;font-size:11.5px;color:var(--muted)">
+    <strong>How to rebuild from scratch:</strong>
+    1) Export Structure + Data from your current file.
+    2) Install new Grid. Create a fresh blank file via Library → New.
+    3) Open that file, come here, import Structure first, then Data.
+  </div>
+</div>
+
+<div style="margin-top:20px;padding:14px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:6px;font-size:12.5px;color:var(--muted)">
+  <strong>About your books</strong><br>Database: <code style="font-size:12px">{{ db_path }}</code><br>
+  Backup: copy the .db file. Restore: replace it with your backup.</div>
+
+<script>
+  const dt = document.getElementById('darkToggle');
+  dt.checked = document.documentElement.classList.contains('dark');
+  function toggleDark(on) {
+    document.documentElement.classList.toggle('dark', on);
+    localStorage.setItem('grid-dark', on ? '1' : '0');
+  }
+</script>
+{% endblock %}

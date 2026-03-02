@@ -1,0 +1,1665 @@
+{% extends "base.html" %}
+{% block title %}{{ account.name }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>
+  {% if parent_report %}
+  <a href="/report/{{ parent_report.id }}#acct-{{ account.name }}">{{ parent_report.description or parent_report.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  {{ account.name }} — {{ account.description }}
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .lh { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:2px; }
+  .lh h1 { font-size:16px; margin:0; }
+  .lh h1 .sub { font-weight:normal; font-size:13px; color:var(--muted); }
+  .bbox { font-family:var(--mono); font-size:13px; font-weight:700; padding:2px 8px; border-radius:2px; }
+  .bbox.p { color:var(--text); background:var(--surface-raised); border:1px solid var(--border); }
+  .bbox.n { color:var(--neg); background:#fdf0f0; border:1px solid #e0c0c0; }
+
+  .lt { display:flex; gap:6px; align-items:center; margin-bottom:3px; font-size:12px; }
+  .lt form { display:flex; gap:4px; align-items:center; }
+  .lt input[type="text"].dt { width:110px; padding:2px 4px; font-size:11px; font-family:var(--mono); }
+
+  .L { width:100%; border-collapse:collapse; font-size:13px; font-family:var(--mono); }
+  .L th { position:sticky; top:0; background:var(--surface); z-index:2; padding:3px 6px; text-align:left;
+    border-bottom:2px solid #999; font-size:11px; font-weight:600; text-transform:uppercase; color:var(--muted); }
+  .L th.r { text-align:right; }
+  .L td { padding:2px 6px; border-bottom:1px solid var(--border-light); white-space:nowrap; }
+  .L td.r { text-align:right; }
+  .L td.d { white-space:normal; max-width:300px; overflow:hidden; text-overflow:ellipsis; }
+  .L tr:hover { background:var(--surface-raised); }
+  .L tr.sel { background:var(--sel); }
+  .L .b { font-weight:600; }
+  .xa { color:var(--accent); text-decoration:none; font-size:12px; cursor:pointer; }
+  .xa.split { color:var(--muted); font-style:italic; font-size:10px; }
+  .xa:hover { text-decoration:underline; }
+  .rc { cursor:pointer; background:none; border:none; font-size:13px; padding:0 2px; }
+  .rc.y { color:var(--pos); }
+  .rc.n { color:var(--faint); }
+  .dc { cursor:pointer; background:none; border:none; font-size:12px; padding:0 2px; }
+  .dc.y { color:var(--accent); }
+  .dc.n { color:var(--faint); }
+
+  .L tr.grp-break td { border-top:2px solid var(--border); }
+
+  .er td { background:var(--surface-raised); border-top:2px solid var(--accent); padding:3px 4px; }
+  .er input { width:100%; padding:3px 4px; border:1px solid var(--border); border-radius:2px;
+    font-family:var(--mono); font-size:13px; background:var(--surface); color:var(--text); box-sizing:border-box; }
+  .er input:focus { outline:none; border-color:var(--accent); box-shadow:0 0 0 2px rgba(44,82,130,0.15); }
+  .er .ai { text-align:right; }
+
+  .aw { position:relative; }
+  .al { display:none; position:fixed; background:var(--surface);
+    border:1px solid var(--border); border-radius:3px; max-height:220px; overflow-y:auto; z-index:1000;
+    box-shadow:0 -4px 12px rgba(0,0,0,0.25); min-width:280px; }
+  .al.open { display:block; }
+  .al .ai2 { padding:5px 10px; cursor:pointer; font-size:12px; display:flex; gap:12px; color:var(--text); }
+  .al .ai2 b { min-width:90px; }
+  .al .ai2:hover,.al .ai2.hl { background:var(--sel); }
+
+  /* Inline editing on existing rows */
+  .L td.editable { cursor:text; }
+  .L td.editable:hover { background:var(--accent-bg); }
+  .L .inline-edit { width:100%; padding:1px 4px; border:1px solid var(--accent); border-radius:1px;
+    font-family:var(--mono); font-size:12px; background:var(--surface); color:var(--text); box-sizing:border-box; }
+  .L .inline-edit:focus { outline:none; box-shadow:0 0 0 2px rgba(44,82,130,0.15); }
+  .L .inline-edit.r { text-align:right; }
+
+  /* Block selection */
+  .L tr.blk { background:rgba(44,82,130,0.12); }
+  .L tr.blk-start { border-top:2px solid var(--accent); }
+  .L tr.blk-end { border-bottom:2px solid var(--accent); }
+  .blk-bar { display:none; padding:6px 10px; font-size:12px; background:var(--surface-raised);
+    border:1px solid var(--accent); border-radius:3px; margin-top:4px;
+    align-items:center; gap:8px; }
+  .blk-bar.active { display:flex; }
+  .blk-bar input { font-family:var(--mono); font-size:12px; padding:3px 6px; width:130px;
+    border:1px solid var(--border); border-radius:2px; background:var(--surface); color:var(--text);
+    text-transform:uppercase; }
+  .blk-bar input:focus { outline:none; border-color:var(--accent); }
+  .blk-bar .btn { font-size:11px; }
+
+  .bf-row td { background:var(--surface-raised); border-bottom:2px solid var(--border); }
+
+  .es { font-size:11px; color:var(--muted); padding:2px 6px; display:flex; justify-content:space-between; }
+  .es .ok { color:var(--pos); font-weight:600; }
+  .es .err { color:var(--neg); font-weight:600; }
+</style>
+
+<div class="lh">
+  <h1>{{ account.name }}{% if account.account_number %} <span class="sub">({{ account.account_number }})</span>{% endif %}
+    <span class="sub">— {{ account.description }}</span>
+  </h1>
+  <div class="bbox {% if balance >= 0 %}p{% else %}n{% endif %}" id="lb">{{ balance|money }}</div>
+</div>
+
+<div class="lt">
+  <form method="get">
+    <label>From</label><input type="text" class="dt" name="from" value="{{ date_from }}" placeholder="yyyy-mm-dd">
+    <label>To</label><input type="text" class="dt" name="to" value="{{ date_to }}" placeholder="yyyy-mm-dd">
+    <button type="submit" class="btn btn-sm">Filter</button>
+    {% if date_from or date_to %}<a href="{{ url_for('account_ledger', account_id=account.id) }}" class="btn btn-sm">Clear</a>{% endif %}
+  </form>
+  <span style="flex:1"></span>
+  <button class="btn btn-sm" id="bulk-toggle" onclick="toggleBulkMode()">Select ✓</button>
+  <span id="bulk-actions" style="display:none">
+    <button class="btn btn-sm" onclick="bulkSelectAll()">All</button>
+    <button class="btn btn-sm" onclick="bulkSelectNone()">None</button>
+    <button class="btn btn-sm" style="color:var(--neg)" onclick="bulkDelete()">Delete Selected</button>
+    <span id="bulk-count" style="font-size:11px;color:var(--muted);margin-left:4px"></span>
+    <span style="font-size:10px;color:var(--muted);margin-left:8px">Shift+click for range</span>
+  </span>
+  <a href="{{ url_for('export_ledger', account_id=account.id) }}" class="btn btn-sm">CSV</a>
+  <a href="/reconcile/{{ account.id }}{% if parent_report %}?from_report={{ parent_report.id }}{% endif %}" class="btn btn-sm">Reconcile</a>
+  <button class="btn btn-sm" onclick="window.print()">Print</button>
+  {% if parent_report and parent_report.name == 'AJE' %}
+  <button class="btn btn-sm" onclick="printAJE()">Print AJE</button>
+  {% endif %}
+</div>
+
+{% if windowed %}
+<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px;margin-bottom:2px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:3px;font-size:12px;">
+  <div style="display:flex;align-items:center;gap:8px;">
+    <a href="?from={{ prev_from }}{% if parent_report %}&amp;from_report={{ parent_report.id }}{% endif %}" class="btn btn-sm" style="font-size:11px;">&#9664; Load prior year</a>
+    <span style="color:var(--muted);">Showing from <b style="font-family:var(--mono)">{{ date_from }}</b></span>
+  </div>
+  <a href="?all=1{% if parent_report %}&amp;from_report={{ parent_report.id }}{% endif %}" class="btn btn-sm" style="font-size:11px;">Show All</a>
+</div>
+{% endif %}
+
+<div style="overflow-y:auto; max-height:calc(100vh - 200px);" id="scroll-wrap">
+<table class="L" id="lt">
+  <thead>
+    <tr>
+      <th style="width:22px">✓</th>
+      <th style="width:26px" title="Document on file">Doc</th>
+      <th style="width:90px">Date</th>
+      <th style="width:70px">Ref</th>
+      <th>Description</th>
+      <th class="r" style="width:90px">Amount</th>
+      <th class="r" style="width:100px">Balance</th>
+      <th style="width:140px">Account</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% if date_from and not show_all %}
+    <tr class="bf-row" style="font-style:italic;color:var(--muted);">
+      <td></td>
+      <td></td>
+      <td></td>
+      <td></td>
+      <td>Balance Forward as of {{ date_from }}</td>
+      <td></td>
+      <td class="r b">{{ opening_balance|money }}</td>
+      <td></td>
+    </tr>
+    {% endif %}
+    {% for e in entries %}
+    <tr id="txn-{{ e.txn_id }}" class="tr{% if parent_report and parent_report.name == 'AJE' and not loop.first and entries[loop.index0 - 1].reference != e.reference %} grp-break{% endif %}" data-tid="{{ e.txn_id }}" data-lid="{{ e.line_id }}" tabindex="0">
+      <td>
+        <form method="post" action="{{ url_for('reconcile', txn_id=e.txn_id) }}" style="display:inline">
+          <input type="hidden" name="return_to" value="{{ request.url }}">
+          <input type="hidden" name="line_id" value="{{ e.line_id }}">
+          <button type="submit" class="rc {% if e.reconciled %}y{% else %}n{% endif %}">{% if e.reconciled %}✓{% else %}○{% endif %}</button>
+        </form>
+      </td>
+      <td>
+        <button class="dc {% if e.doc_on_file %}y{% else %}n{% endif %}" data-lid="{{ e.line_id }}" onclick="toggleDoc(this)" title="Document on file">{% if e.doc_on_file %}📎{% else %}·{% endif %}</button>
+      </td>
+      <td class="editable" data-field="date" data-val="{{ e.date }}">{{ e.date }}</td>
+      <td class="editable" data-field="reference" data-val="{{ e.reference }}" style="font-size:11px">{{ e.reference }}</td>
+      <td class="d editable" data-field="description" data-val="{{ e.description }}">{{ e.description }}</td>
+      <td class="r {% if e.line_count <= 2 %}editable{% endif %}" data-field="amount" data-val="{{ e.amount }}" {% if e.line_count > 2 %}data-split="1"{% endif %}>{% if e.amount > 0 %}{{ e.amount|money }}{% elif e.amount < 0 %}({{ (-e.amount)|money }}){% else %}—{% endif %}</td>
+      <td class="r b">{{ e.running_balance|money }}</td>
+      <td>{% if e.line_count > 2 %}<a href="{{ url_for('edit_transaction', txn_id=e.txn_id) }}?from_account={{ account.id }}{% if parent_report %}&amp;from_report={{ parent_report.id }}{% endif %}&amp;return_to={{ ('/ledger/' ~ account.id|string ~ '?from_report=' ~ (parent_report.id|string if parent_report else '') ~ '#txn-' ~ e.txn_id|string)|urlencode }}" class="xa split" title="Split — edit in transaction detail">–split–</a>{% elif e.cross_accounts %}<span class="xa editable" data-field="account" data-val="{{ e.cross_accounts }}" title="Click to edit account">{{ e.cross_accounts }}</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+
+    <!-- ═══ INLINE ENTRY ROW ═══ -->
+    <tr class="er" id="qe">
+      <td></td>
+      <td></td>
+      <td><input type="text" name="date" id="ed" value="{{ today }}" tabindex="1" placeholder="yyyy-mm-dd" style="width:95px"></td>
+      <td><input type="text" name="reference" id="er" placeholder="{% if parent_report and parent_report.name == 'AJE' %}25AJE01{% endif %}" tabindex="2" style="width:70px"></td>
+      <td><input type="text" name="description" id="em" placeholder="Description..." tabindex="3"></td>
+      <td><input type="text" name="amount" id="ea" class="ai" placeholder="0.00" tabindex="4"></td>
+      <td></td>
+      <td class="aw">
+        <input type="text" name="cross_account" id="ex" placeholder="Acct" tabindex="5" autocomplete="off">
+        <div class="al" id="dd"></div>
+      </td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- Block Move Bar -->
+<div class="blk-bar" id="blkBar">
+  <b id="blkCount">0</b> selected&nbsp;→&nbsp;Move to:
+  <input type="text" id="blkTarget" placeholder="Account name" autocomplete="off">
+  <button class="btn btn-sm btn-primary" onclick="doBlockMove()">F4 Move</button>
+  <button class="btn btn-sm" onclick="clearBlock()">Cancel</button>
+</div>
+
+<!-- Procedures Menu -->
+<div id="procMenu" style="display:none;position:fixed;z-index:200;background:var(--surface);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.25);min-width:220px;font-size:12px">
+  <div style="padding:6px 10px;font-weight:600;border-bottom:1px solid var(--border);font-size:10px;text-transform:uppercase;color:var(--muted)">Procedures</div>
+  <div class="proc-item" data-proc="move-block" style="padding:5px 10px;cursor:pointer" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background=''">Move Block <span style="color:var(--muted);float:right">[ ] + F4</span></div>
+  <div class="proc-item" data-proc="stripe-deposit" style="padding:5px 10px;cursor:pointer" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background=''" onclick="openStripeDeposit()">Stripe Deposit <span style="color:var(--muted);float:right">batch</span></div>
+  {% if parent_report and parent_report.name == 'AJE' %}
+  <div class="proc-item" data-proc="csw-import" style="padding:5px 10px;cursor:pointer" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background=''" onclick="openCswImport()">Import CsW AJE <span style="color:var(--muted);float:right">file</span></div>
+  {% endif %}
+  <div style="border-top:1px solid var(--border);padding:4px 10px;font-size:10px;color:var(--muted)">More procedures coming soon</div>
+</div>
+
+<!-- Stripe Deposit Modal -->
+<div id="stripeModal" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.5);align-items:center;justify-content:center">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.3);width:min(820px,95vw);max-height:90vh;display:flex;flex-direction:column">
+  <!-- Header -->
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;align-items:start">
+      <div style="font-weight:700;font-size:14px">Stripe Deposit Reconciliation</div>
+      <button onclick="closeStripeDeposit()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);padding:0 4px;line-height:1">&times;</button>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-top:2px">
+      Enter each charge from the Stripe payout report. Posts as <b>one distribution entry</b> labeled "Stripe deposits, net":<br>
+      <b>DR</b> {{ account.name }} (net total) &nbsp;·&nbsp; <b>CR</b> each client AR (gross) &nbsp;·&nbsp; <b>DR</b> <span id="stripeFeeLabel" style="font-family:var(--mono)">EX.CC</span> (fees)
+    </div>
+  </div>
+  <!-- Deposit header fields -->
+  <div style="padding:10px 16px;border-bottom:1px solid var(--border-light);background:var(--surface-raised);display:flex;gap:20px;align-items:end;flex-wrap:wrap">
+    <div>
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Deposit Date (yyyy-mm-dd)</label>
+      <input type="text" id="stripeDate" placeholder="2025-02-12" style="font-family:var(--mono);font-size:12px;width:110px;padding:4px 6px">
+    </div>
+    <div>
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Expected Net Deposit (from Stripe payout)</label>
+      <input type="text" id="stripeExpected" placeholder="e.g. 4138.77" style="font-family:var(--mono);font-size:12px;width:120px;padding:4px 6px;text-align:right" oninput="stripeRecalcTotals()">
+    </div>
+    <div style="flex:1"></div>
+    <div style="text-align:right">
+      <div style="font-size:10px;color:var(--muted)">Running Net Total</div>
+      <div style="font-family:var(--mono);font-size:14px;font-weight:700" id="stripeNetTotal">0.00</div>
+      <span id="stripeDiffBadge" style="display:none;padding:1px 8px;border-radius:3px;font-size:10px;font-weight:600"></span>
+    </div>
+  </div>
+  <!-- Line items table -->
+  <div style="flex:1;overflow-y:auto;padding:0">
+    <table style="width:100%;border-collapse:collapse;font-size:12px" id="stripeTable">
+      <thead>
+        <tr style="background:var(--surface-raised);position:sticky;top:0;z-index:1">
+          <th style="text-align:center;padding:6px 4px;font-size:10px;font-weight:600;color:var(--muted);width:26px">#</th>
+          <th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:600;color:var(--muted);width:170px">Client AR Account</th>
+          <th style="text-align:left;padding:6px 8px;font-size:10px;font-weight:600;color:var(--muted)">Invoice / Ref</th>
+          <th style="text-align:right;padding:6px 8px;font-size:10px;font-weight:600;color:var(--muted);width:105px">Gross Charge</th>
+          <th style="text-align:right;padding:6px 8px;font-size:10px;font-weight:600;color:var(--muted);width:95px">Stripe Fee</th>
+          <th style="text-align:right;padding:6px 8px;font-size:10px;font-weight:600;color:var(--muted);width:105px">Net to Clearing</th>
+          <th style="width:24px"></th>
+        </tr>
+      </thead>
+      <tbody id="stripeLines">
+      </tbody>
+      <tfoot>
+        <tr style="border-top:2px solid var(--border);font-weight:600;background:var(--surface-raised)">
+          <td colspan="3" style="padding:6px 8px;text-align:right;font-size:11px;color:var(--muted)">TOTALS</td>
+          <td style="text-align:right;padding:6px 8px;font-family:var(--mono)" id="stripeTotGross">0.00</td>
+          <td style="text-align:right;padding:6px 8px;font-family:var(--mono);color:#c33" id="stripeTotFee">0.00</td>
+          <td style="text-align:right;padding:6px 8px;font-family:var(--mono);font-weight:700" id="stripeTotNet">0.00</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  <!-- Footer -->
+  <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <button class="btn btn-sm" onclick="stripeAddRow()" style="font-size:12px">+ Add Line</button>
+    <div style="display:flex;gap:8px;align-items:center">
+      <span id="stripeStatus" style="font-size:11px;color:var(--muted)"></span>
+      <button class="btn btn-sm" onclick="closeStripeDeposit()">Cancel</button>
+      <button class="btn btn-sm btn-primary" id="stripePostBtn" onclick="stripePost()">Post All</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<!-- CaseWare AJE Import Modal -->
+<div id="cswModal" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.5);align-items:center;justify-content:center">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.3);width:min(900px,95vw);max-height:90vh;display:flex;flex-direction:column">
+  <!-- Header -->
+  <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+    <div style="display:flex;justify-content:space-between;align-items:start">
+      <div style="font-weight:700;font-size:14px">Import CaseWare Adjusting Entries</div>
+      <button onclick="closeCswImport()" style="background:none;border:none;font-size:18px;cursor:pointer;color:var(--muted);padding:0 4px;line-height:1">&times;</button>
+    </div>
+  </div>
+  <!-- Step 1: Upload -->
+  <div id="cswStep1" style="padding:16px;flex:1;overflow-y:auto">
+    <div style="margin-bottom:12px;color:var(--muted);font-size:11px">
+      Upload a CaseWare AJE export file (QuickBooks IIF or Venice text format).
+    </div>
+    <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:2px">AJE File</label>
+        <input type="file" id="cswFile" accept=".iif,.txt,.IIF,.TXT" style="font-size:12px">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--muted);display:block;margin-bottom:2px">Ref Prefix</label>
+        <input type="text" id="cswPrefix" style="width:80px;font-size:12px;padding:4px 6px;font-family:var(--mono)" placeholder="25AJE">
+      </div>
+      <button class="btn btn-sm btn-primary" id="cswParseBtn" onclick="cswParse()">Parse File</button>
+    </div>
+    <div id="cswParseStatus" style="margin-top:8px;font-size:11px;color:var(--muted)"></div>
+  </div>
+  <!-- Step 2: Map & Preview (hidden initially) -->
+  <div id="cswStep2" style="display:none;padding:0 16px 16px;flex:1;overflow-y:auto;max-height:calc(90vh - 160px)">
+    <div style="font-weight:600;font-size:12px;margin-bottom:6px">Account Mapping</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px" id="cswMapTable">
+      <thead><tr style="text-align:left;border-bottom:1px solid var(--border)">
+        <th style="padding:4px 6px">CsW Account</th>
+        <th style="padding:4px 6px;width:50px">CsW #</th>
+        <th style="padding:4px 6px;width:20px;text-align:center">&rarr;</th>
+        <th style="padding:4px 6px;width:200px">Grid Account</th>
+      </tr></thead>
+      <tbody id="cswMapBody"></tbody>
+    </table>
+    <div style="font-weight:600;font-size:12px;margin-bottom:6px">Entry Preview</div>
+    <div style="max-height:280px;overflow-y:auto;border:1px solid var(--border);border-radius:4px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px" id="cswPreviewTable">
+        <thead><tr style="text-align:left;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--surface)">
+          <th style="padding:4px 6px">Ref</th>
+          <th style="padding:4px 6px">Date</th>
+          <th style="padding:4px 6px">Description</th>
+          <th style="padding:4px 6px;text-align:right">Debit</th>
+          <th style="padding:4px 6px;text-align:right">Credit</th>
+        </tr></thead>
+        <tbody id="cswPreviewBody"></tbody>
+      </table>
+    </div>
+  </div>
+  <!-- Footer -->
+  <div style="padding:10px 16px;border-top:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
+    <span id="cswStatus" style="font-size:11px;color:var(--muted)"></span>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-sm" onclick="closeCswImport()">Cancel</button>
+      <button class="btn btn-sm btn-primary" id="cswImportBtn" onclick="cswImport()" disabled>Import 0 Entries</button>
+    </div>
+  </div>
+</div>
+</div>
+
+<div class="es" id="es">
+  <span>Type date, desc, amount, account → <b>Enter</b> to post. <b>Dbl-click</b> to edit.</span>
+  <span style="color:var(--muted)"><kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">↑↓</kbd> nav
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">\</kbd> procedures
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">F3</kbd> edit
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">F5</kbd> jump
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">F2</kbd> up
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">F8</kbd> GST paid
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">F9</kbd> GST coll
+    <kbd style="background:var(--surface-raised);padding:1px 4px;border-radius:2px;font-size:10px">Del</kbd> delete</span>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, message in messages %}
+    <div class="flash flash-{{ category }}" style="margin-top:4px">{{ message }}</div>
+  {% endfor %}
+{% endwith %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const AID = {{ account.id }};
+const REPORT_ID = '{{ parent_report.id if parent_report else "" }}';
+const IS_AJE = {{ 'true' if parent_report and parent_report.name == 'AJE' else 'false' }};
+
+// ── AJE sticky date/ref: pre-fill from previous post ──
+if (IS_AJE) {
+  const sd = sessionStorage.getItem('aje_sticky_date');
+  const sr = sessionStorage.getItem('aje_sticky_ref');
+  document.addEventListener('DOMContentLoaded', function() {
+    if (sd) document.getElementById('ed').value = sd;
+    if (sr) document.getElementById('er').value = sr;
+  });
+}
+
+// ── Print AJE ──
+function printAJE() {
+  const f = document.querySelector('input[name="from"]').value || '';
+  const t = document.querySelector('input[name="to"]').value || '';
+  const begin = prompt('From date (yyyy-mm-dd):', f);
+  if (begin === null) return;
+  const end = prompt('To date (yyyy-mm-dd):', t);
+  if (end === null) return;
+  window.open('/reports/aje/' + AID + '?begin=' + encodeURIComponent(begin.trim()) + '&end=' + encodeURIComponent(end.trim()), '_blank');
+}
+
+// ── Doc-on-file toggle (AJAX) ──
+async function toggleDoc(btn) {
+  const lid = btn.dataset.lid;
+  const r = await fetch('/api/doc-toggle/' + lid, {method:'POST'});
+  const d = await r.json();
+  if (d.ok) {
+    btn.className = 'dc ' + (d.doc_on_file ? 'y' : 'n');
+    btn.textContent = d.doc_on_file ? '📎' : '·';
+  }
+}
+
+// ── Dropdown positioning (fixed, escapes scroll container) ──
+function positionDropdown(input, dropdown) {
+  const rect = input.getBoundingClientRect();
+  dropdown.style.left = rect.left + 'px';
+  dropdown.style.width = Math.max(rect.width, 280) + 'px';
+  // Show above the input
+  dropdown.style.bottom = (window.innerHeight - rect.top + 2) + 'px';
+  dropdown.style.top = 'auto';
+}
+
+// ── Account Autocomplete (entry row) ──
+const xi = document.getElementById('ex');
+const dd = document.getElementById('dd');
+let ahi = -1, ar = [];
+
+xi.addEventListener('input', async function() {
+  const q = this.value.trim();
+  if (q.length < 1) { dd.classList.remove('open'); return; }
+  const r = await fetch('/api/account-search?q=' + encodeURIComponent(q) + '&posting=1');
+  ar = await r.json();
+  dd.innerHTML = ar.map((a,i) =>
+    `<div class="ai2" data-i="${i}" data-n="${a.name}"><b>${a.name}</b> <span style="color:var(--muted);font-size:11px">${a.description||''}</span></div>`
+  ).join('');
+  ahi = -1;
+  positionDropdown(xi, dd);
+  dd.classList.toggle('open', ar.length > 0);
+});
+
+dd.addEventListener('click', function(e) {
+  const it = e.target.closest('.ai2');
+  if (it) { xi.value = it.dataset.n; dd.classList.remove('open'); }
+});
+
+xi.addEventListener('keydown', function(e) {
+  const open = dd.classList.contains('open');
+  const its = dd.querySelectorAll('.ai2');
+  if (open) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); ahi = Math.min(ahi+1, its.length-1); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); ahi = Math.max(ahi-1, 0); }
+    else if (e.key === 'Enter' && ahi >= 0) {
+      e.preventDefault(); xi.value = its[ahi].dataset.n; dd.classList.remove('open'); return;
+    } else if (e.key === 'Tab' && ahi >= 0) {
+      xi.value = its[ahi].dataset.n; dd.classList.remove('open'); return;
+    } else if (e.key === 'Tab' && its.length === 1) {
+      xi.value = its[0].dataset.n; dd.classList.remove('open'); return;
+    } else if (e.key === 'Enter' && ahi < 0 && its.length === 1) {
+      e.preventDefault(); xi.value = its[0].dataset.n; dd.classList.remove('open');
+      setTimeout(() => doPost(false), 50); return;
+    } else {
+      its.forEach((it,i) => it.classList.toggle('hl', i===ahi));
+      return;
+    }
+    its.forEach((it,i) => it.classList.toggle('hl', i===ahi));
+    if (ahi >= 0) its[ahi].scrollIntoView({block:'nearest'});
+  } else {
+    if (e.key === 'Enter') { e.preventDefault(); doPost(false); return; }
+  }
+});
+xi.addEventListener('blur', () => setTimeout(() => dd.classList.remove('open'), 150));
+
+// ── Description Autocomplete (entry row) ──
+const descInput = document.getElementById('em');
+const descDD = document.createElement('div');
+descDD.className = 'al';
+descDD.style.cssText = 'position:fixed;z-index:1000;min-width:280px';
+document.body.appendChild(descDD);
+let dahi = -1;
+
+descInput.addEventListener('input', async function() {
+  const q = this.value.trim();
+  if (q.length < 2) { descDD.classList.remove('open'); return; }
+  const r = await fetch('/api/description-suggest?q=' + encodeURIComponent(q));
+  const suggestions = await r.json();
+  if (suggestions.length === 0) { descDD.classList.remove('open'); return; }
+  descDD.innerHTML = suggestions.map((s,i) =>
+    `<div class="ai2" data-i="${i}" data-v="${s.replace(/"/g,'&quot;')}">${s}</div>`
+  ).join('');
+  dahi = -1;
+  positionDropdown(descInput, descDD);
+  descDD.classList.add('open');
+});
+
+descDD.addEventListener('click', function(e) {
+  const it = e.target.closest('.ai2');
+  if (it) { descInput.value = it.dataset.v; descDD.classList.remove('open'); }
+});
+
+descInput.addEventListener('keydown', function(e) {
+  if (!descDD.classList.contains('open')) return;
+  const its = descDD.querySelectorAll('.ai2');
+  if (e.key === 'ArrowDown') { e.preventDefault(); dahi = Math.min(dahi+1, its.length-1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); dahi = Math.max(dahi-1, 0); }
+  else if ((e.key === 'Tab' || e.key === 'Enter') && dahi >= 0) {
+    if (e.key === 'Enter') e.preventDefault();
+    descInput.value = its[dahi].dataset.v; descDD.classList.remove('open'); return;
+  } else if (e.key === 'Tab' && its.length === 1) {
+    descInput.value = its[0].dataset.v; descDD.classList.remove('open'); return;
+  } else if (e.key === 'Escape') { descDD.classList.remove('open'); return; }
+  else return;
+  its.forEach((it,i) => it.classList.toggle('hl', i===dahi));
+  if (dahi >= 0) its[dahi].scrollIntoView({block:'nearest'});
+});
+descInput.addEventListener('blur', () => setTimeout(() => descDD.classList.remove('open'), 150));
+
+// ── Entry row: Enter/Esc on all fields ──
+document.querySelectorAll('.er input').forEach(inp => {
+  if (inp.id === 'ex' || inp.id === 'em') return;
+  inp.addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') { e.preventDefault(); doPost(false); }
+    if (e.key === 'Escape') { e.preventDefault(); clr(); }
+  });
+});
+
+// ── Inline Editing of Existing Rows ──
+document.querySelector('tbody').addEventListener('dblclick', function(e) {
+  const td = e.target.closest('td.editable, td[data-split]');
+  if (!td || td.querySelector('.inline-edit')) return;
+  if (td.dataset.split === '1') {
+    // Split transaction — can't edit amount inline
+    const tr = td.closest('tr');
+    const tid = tr ? tr.dataset.tid : '';
+    const retUrl = window.location.pathname + window.location.search + '#txn-' + tid;
+    const editUrl = '/transaction/'+tid+'/edit?from_account={{account.id}}{% if parent_report %}&from_report={{parent_report.id}}{% endif %}&return_to=' + encodeURIComponent(retUrl);
+    const msg = document.createElement('div');
+    msg.style.cssText = 'position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);background:var(--surface);border:1px solid var(--border);padding:16px 24px;border-radius:4px;box-shadow:0 4px 20px rgba(0,0,0,.25);z-index:999;text-align:center;font-size:12px;max-width:320px';
+    msg.innerHTML = '<div style="font-weight:600;margin-bottom:6px">Split Transaction</div>' +
+      '<div style="color:var(--muted);margin-bottom:10px">This entry has multiple lines. To change amounts, edit the full distribution.</div>' +
+      '<a href="'+editUrl+'" class="btn btn-sm btn-primary" style="margin-right:4px">Open Detail</a>' +
+      '<button class="btn btn-sm" onclick="this.closest(\'div\').remove()">Cancel</button>';
+    document.body.appendChild(msg);
+    return;
+  }
+  if (!td.classList.contains('editable')) return;
+  startEdit(td);
+});
+
+// Single-click on account span to edit (instead of old hyperlink jump)
+document.querySelector('tbody').addEventListener('click', function(e) {
+  const span = e.target.closest('span.xa.editable');
+  if (!span || span.querySelector('.inline-edit')) return;
+  e.preventDefault();
+  startEdit(span);
+});
+
+function startEdit(td) {
+  const tr = td.closest('tr');
+  const field = td.dataset.field;
+  const val = td.dataset.val;
+  const tid = tr.dataset.tid;
+  const lid = tr.dataset.lid;
+  const isAmount = field === 'amount';
+  const isAccount = field === 'account';
+  
+  // Format amount for editing
+  let editVal = val;
+  if (isAmount) {
+    const cents = parseInt(val);
+    editVal = (cents / 100).toFixed(2);
+  }
+  
+  const input = document.createElement('input');
+  input.className = 'inline-edit' + (isAmount ? ' r' : '');
+  input.value = editVal;
+  if (isAccount) { input.style.textTransform = 'uppercase'; input.autocomplete = 'off'; }
+  td.textContent = '';
+  td.appendChild(input);
+  input.focus();
+  input.select();
+  
+  // Save original display text for revert on error
+  const originalDisplay = editVal === '' ? (isAmount ? '—' : '') : 
+    (isAmount ? td.getAttribute('data-val') : editVal);
+
+  // ── Account autocomplete dropdown ──
+  let acctDD = null, acctHi = -1;
+  if (isAccount) {
+    acctDD = document.createElement('div');
+    acctDD.style.cssText = 'display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:3px;max-height:180px;overflow-y:auto;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.2);font-size:11px;';
+    const wrapper = td.closest('td') || td;
+    wrapper.style.position = 'relative';
+    wrapper.appendChild(acctDD);
+    input.addEventListener('input', async function() {
+      const q = this.value.trim();
+      if (q.length < 1) { acctDD.style.display = 'none'; return; }
+      const r = await fetch('/api/account-search?q=' + encodeURIComponent(q));
+      const accts = await r.json();
+      acctDD.innerHTML = accts.map(a =>
+        `<div data-n="${a.name}" style="padding:3px 6px;cursor:pointer;display:flex;justify-content:space-between;color:var(--text)" onmouseover="this.style.background='var(--sel)'" onmouseout="this.style.background=''"><b>${a.name}</b><span style="color:var(--muted)">${a.description||''}</span></div>`
+      ).join('');
+      acctHi = -1;
+      acctDD.style.display = accts.length > 0 ? 'block' : 'none';
+    });
+    acctDD.addEventListener('mousedown', function(e) {
+      e.preventDefault(); // prevent blur
+      const it = e.target.closest('[data-n]');
+      if (it) { input.value = it.dataset.n; acctDD.style.display = 'none'; commit(); }
+    });
+  }
+
+  function commit() {
+    if (acctDD) acctDD.style.display = 'none';
+    const newVal = input.value.trim();
+    fetch('/api/inline-edit', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({txn_id:parseInt(tid), line_id:parseInt(lid), field:field, value:newVal})
+    }).then(r=>r.json()).then(d => {
+      if (d.ok) {
+        // Reload with anchor to stay at same position
+        const url = window.location.pathname + window.location.search + '#txn-' + tid;
+        window.location.replace(url);
+        window.location.reload();
+      } else {
+        // Revert the cell to its original value and show error
+        if (acctDD) acctDD.remove();
+        input.remove();
+        td.textContent = originalDisplay;
+        alert(d.error);
+      }
+    });
+  }
+  
+  input.addEventListener('keydown', function(e) {
+    // Handle autocomplete navigation first
+    if (isAccount && acctDD && acctDD.style.display === 'block') {
+      const items = acctDD.querySelectorAll('[data-n]');
+      if (e.key === 'ArrowDown') { e.preventDefault(); acctHi = Math.min(acctHi+1, items.length-1); items.forEach((it,i) => it.style.background = i===acctHi ? 'var(--sel)' : ''); return; }
+      if (e.key === 'ArrowUp') { e.preventDefault(); acctHi = Math.max(acctHi-1, 0); items.forEach((it,i) => it.style.background = i===acctHi ? 'var(--sel)' : ''); return; }
+      if ((e.key === 'Enter' || e.key === 'Tab') && acctHi >= 0) { e.preventDefault(); input.value = items[acctHi].dataset.n; acctDD.style.display = 'none'; commit(); return; }
+      if (e.key === 'Tab' && items.length === 1) { e.preventDefault(); input.value = items[0].dataset.n; acctDD.style.display = 'none'; commit(); return; }
+    }
+    if (e.key === 'Enter') { e.preventDefault(); commit(); }
+    if (e.key === 'Escape') { e.preventDefault(); if (acctDD) acctDD.remove(); input.remove(); td.textContent = originalDisplay; }
+    if (e.key === 'Tab') { e.preventDefault(); commit(); }
+  });
+  input.addEventListener('blur', function() {
+    setTimeout(function() {
+      // If value changed, commit; otherwise just revert the cell
+      if (!document.body.contains(input)) return; // already committed
+      const newVal = input.value.trim();
+      const origVal = isAmount ? (parseInt(val)/100).toFixed(2) : val;
+      if (newVal !== origVal) { commit(); }
+      else {
+        if (acctDD) acctDD.remove();
+        input.remove();
+        td.textContent = originalDisplay;
+      }
+    }, 150);
+  });
+}
+
+// ── Row selection / keyboard nav ──
+const trs = [...document.querySelectorAll('tr.tr')];
+let selRow = -1;
+let blkStart = -1, blkEnd = -1; // block selection indices
+
+function selTr(idx) {
+  if (idx < 0 || idx >= trs.length) return;
+  if (selRow >= 0 && selRow < trs.length) trs[selRow].classList.remove('sel');
+  selRow = idx;
+  trs[selRow].classList.add('sel');
+  trs[selRow].scrollIntoView({block:'nearest'});
+}
+
+// Scroll to and select transaction from hash anchor (e.g. #txn-42)
+if (window.location.hash) {
+  const target = document.querySelector(window.location.hash);
+  if (target) {
+    const idx = trs.indexOf(target);
+    if (idx >= 0) { setTimeout(() => selTr(idx), 50); }
+  }
+}
+
+function updateBlockHighlight() {
+  trs.forEach(tr => tr.classList.remove('blk','blk-start','blk-end'));
+  if (blkStart < 0) { document.getElementById('blkBar').classList.remove('active'); return; }
+  const s = Math.min(blkStart, blkEnd >= 0 ? blkEnd : blkStart);
+  const e = Math.max(blkStart, blkEnd >= 0 ? blkEnd : blkStart);
+  let count = 0;
+  for (let i = s; i <= e; i++) {
+    trs[i].classList.add('blk');
+    if (i === s) trs[i].classList.add('blk-start');
+    if (i === e) trs[i].classList.add('blk-end');
+    count++;
+  }
+  document.getElementById('blkCount').textContent = count;
+  document.getElementById('blkBar').classList.add('active');
+}
+
+function clearBlock() {
+  blkStart = -1; blkEnd = -1;
+  updateBlockHighlight();
+}
+
+function getBlockLineIds() {
+  if (blkStart < 0) return [];
+  const s = Math.min(blkStart, blkEnd >= 0 ? blkEnd : blkStart);
+  const e = Math.max(blkStart, blkEnd >= 0 ? blkEnd : blkStart);
+  const ids = [];
+  for (let i = s; i <= e; i++) {
+    const lid = trs[i].dataset.lid;
+    if (lid) ids.push(parseInt(lid));
+  }
+  return ids;
+}
+
+async function doBlockMove() {
+  const target = document.getElementById('blkTarget').value.trim().toUpperCase();
+  if (!target) { alert('Enter target account name'); return; }
+  const ids = getBlockLineIds();
+  if (ids.length === 0) { alert('No lines selected'); return; }
+  if (!confirm(`Move ${ids.length} transaction(s) to ${target}?`)) return;
+  
+  const r = await fetch('/api/block-move', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({line_ids: ids, to_account_name: target})
+  });
+  const d = await r.json();
+  if (d.ok) { window.location.reload(); }
+  else { alert(d.error); }
+}
+
+// Block target autocomplete
+const blkInput = document.getElementById('blkTarget');
+const blkDD = document.createElement('div');
+blkDD.className = 'al';
+blkDD.style.cssText = 'position:fixed;z-index:1000;min-width:280px';
+document.body.appendChild(blkDD);
+let bahi = -1;
+
+blkInput.addEventListener('input', async function() {
+  const q = this.value.trim();
+  if (q.length < 1) { blkDD.classList.remove('open'); return; }
+  const r = await fetch('/api/account-search?q=' + encodeURIComponent(q) + '&posting=1');
+  const accts = await r.json();
+  blkDD.innerHTML = accts.map((a,i) =>
+    `<div class="ai2" data-i="${i}" data-n="${a.name}"><b>${a.name}</b> <span style="color:var(--muted);font-size:11px">${a.description||''}</span></div>`
+  ).join('');
+  bahi = -1;
+  positionDropdown(blkInput, blkDD);
+  blkDD.classList.toggle('open', accts.length > 0);
+});
+blkDD.addEventListener('click', function(e) {
+  const it = e.target.closest('.ai2');
+  if (it) { blkInput.value = it.dataset.n; blkDD.classList.remove('open'); }
+});
+blkInput.addEventListener('keydown', function(e) {
+  if (!blkDD.classList.contains('open')) {
+    if (e.key === 'Enter' || e.key === 'F4') { e.preventDefault(); doBlockMove(); return; }
+    return;
+  }
+  const its = blkDD.querySelectorAll('.ai2');
+  if (e.key === 'ArrowDown') { e.preventDefault(); bahi = Math.min(bahi+1, its.length-1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); bahi = Math.max(bahi-1, 0); }
+  else if ((e.key === 'Enter' || e.key === 'Tab') && bahi >= 0) {
+    e.preventDefault(); blkInput.value = its[bahi].dataset.n; blkDD.classList.remove('open'); return;
+  } else if (e.key === 'Tab' && its.length === 1) {
+    blkInput.value = its[0].dataset.n; blkDD.classList.remove('open'); return;
+  } else return;
+  its.forEach((it,i) => it.classList.toggle('hl', i===bahi));
+});
+blkInput.addEventListener('blur', () => setTimeout(() => blkDD.classList.remove('open'), 150));
+
+document.querySelector('tbody').addEventListener('click', function(e) {
+  const tr = e.target.closest('tr.tr');
+  if (tr) {
+    const i = trs.indexOf(tr);
+    if (i >= 0) {
+      if (e.shiftKey && selRow >= 0) {
+        // Shift+click = set block range
+        blkStart = Math.min(selRow, i);
+        blkEnd = Math.max(selRow, i);
+        updateBlockHighlight();
+      }
+      selTr(i);
+    }
+  }
+});
+
+document.addEventListener('keydown', function(e) {
+  const inEntry = e.target.closest('.er');
+  const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT';
+  const inInline = e.target.classList.contains('inline-edit');
+  const inBlk = e.target.id === 'blkTarget';
+
+  if (inInline || inBlk) return;
+
+  // F4 = execute block move (if block is active)
+  if (e.key === 'F4') {
+    e.preventDefault();
+    if (blkStart >= 0) { document.getElementById('blkTarget').focus(); }
+    return;
+  }
+
+  // Alt+B or [ = block start, Alt+E or ] = block end
+  if ((e.altKey && e.key === 'b') || e.key === '[') {
+    e.preventDefault();
+    if (selRow >= 0) { blkStart = selRow; if (blkEnd < blkStart) blkEnd = blkStart; updateBlockHighlight(); }
+    return;
+  }
+  if ((e.altKey && e.key === 'e') || e.key === ']') {
+    e.preventDefault();
+    if (selRow >= 0 && blkStart >= 0) { blkEnd = selRow; updateBlockHighlight(); }
+    return;
+  }
+  // Shift+click extends block
+  // Escape clears block (if no entry row focus)
+  if (e.key === 'Escape' && blkStart >= 0 && !inEntry) {
+    e.preventDefault(); clearBlock(); return;
+  }
+
+  if (e.key === 'F8') {
+    e.preventDefault();
+    if (inEntry) { doPost(true, 'purchase'); }
+    else if (selRow >= 0) { doGstSplit('purchase'); }
+    return;
+  }
+  if (e.key === 'F9') {
+    e.preventDefault();
+    if (inEntry) { doPost(true, 'sale'); }
+    else if (selRow >= 0) { doGstSplit('sale'); }
+    return;
+  }
+
+  // Backslash = Procedures menu
+  if (e.key === '\\' && !inEntry && !inInput) {
+    e.preventDefault();
+    const pm = document.getElementById('procMenu');
+    if (pm.style.display === 'block') { pm.style.display = 'none'; return; }
+    // Position near selected row or center
+    let top = 200, left = 200;
+    if (selRow >= 0) {
+      const rect = trs[selRow].getBoundingClientRect();
+      top = rect.bottom + 2; left = rect.left + 40;
+    }
+    pm.style.top = Math.min(top, window.innerHeight - 120) + 'px';
+    pm.style.left = Math.min(left, window.innerWidth - 240) + 'px';
+    pm.style.display = 'block';
+    return;
+  }
+
+  if (e.key === 'F2' || (e.key === 'Escape' && !inEntry && blkStart < 0)) {
+    e.preventDefault();
+    // F2 = contract = go UP to parent report with cursor on this account
+    {% if parent_report %}
+    window.location = '/report/{{ parent_report.id }}#acct-{{ account.name }}';
+    {% else %}
+    window.location = '/';
+    {% endif %}
+    return;
+  }
+
+  if (e.key === 'F5') {
+    e.preventDefault();
+    if (selRow >= 0) {
+      const xa = trs[selRow].querySelector('.xa');
+      if (xa) {
+        if (xa.tagName === 'A') {
+          window.location = xa.href;  // –split– link
+        } else {
+          // Account span — jump to cross-account ledger
+          const acctName = (xa.dataset.val || xa.textContent).trim().toUpperCase();
+          if (acctName) {
+            const tid = trs[selRow].dataset.tid;
+            let url = '/ledger-by-name/' + encodeURIComponent(acctName) + '?focus_txn=' + tid;
+            {% if parent_report %}url += '&from_report={{ parent_report.id }}';{% endif %}
+            window.location = url;
+          }
+        }
+      }
+    }
+    return;
+  }
+
+  if (e.key === 'F3') {
+    e.preventDefault();
+    if (selRow >= 0) {
+      const tid = trs[selRow].dataset.tid;
+      const retUrl = window.location.pathname + window.location.search + '#txn-' + tid;
+      if (tid) window.location = '/transaction/' + tid + '/edit?from_account={{ account.id }}{% if parent_report %}&from_report={{ parent_report.id }}{% endif %}&return_to=' + encodeURIComponent(retUrl);
+    }
+    return;
+  }
+
+  if (e.key === 'Delete' && !inInput) {
+    e.preventDefault();
+    if (selRow >= 0) {
+      const tid = trs[selRow].dataset.tid;
+      const desc = trs[selRow].querySelector('.d')?.textContent?.trim() || '';
+      if (tid && confirm('Delete transaction: "' + desc + '"?\n\nThis cannot be undone.')) {
+        const fd = new FormData();
+        fd.append('return_to', window.location.href);
+        fetch('/transaction/' + tid + '/delete', {method:'POST', body:fd})
+          .then(() => window.location.reload());
+      }
+    }
+    return;
+  }
+
+  if (!inEntry) {
+    if (e.key === 'ArrowDown') { e.preventDefault(); selTr(selRow + 1); return; }
+    if (e.key === 'ArrowUp') { e.preventDefault(); selTr(selRow - 1); return; }
+    if (e.key === 'Enter' && !inInput) {
+      // Enter on selected row = start editing the description
+      e.preventDefault();
+      if (selRow >= 0) {
+        const td = trs[selRow].querySelector('td[data-field="description"]');
+        if (td) startEdit(td);
+      }
+      return;
+    }
+  }
+});
+
+async function doPost(gst, gstType) {
+  const d = document.getElementById('ed').value;
+  const r = document.getElementById('er').value;
+  const m = document.getElementById('em').value;
+  const a = document.getElementById('ea').value;
+  const x = document.getElementById('ex').value;
+  if (!d.trim()) return;
+
+  // AJE reference format: xxAJEyy (e.g. 25AJE03)
+  if (IS_AJE && r.trim()) {
+    if (!/^\d{2}AJE\d{2,}$/i.test(r.trim())) {
+      ss('err', 'AJE reference must be in format xxAJEyy (e.g. 25AJE03). xx=year, yy=sequence number.');
+      document.getElementById('er').focus();
+      document.getElementById('er').select();
+      return;
+    }
+  }
+
+  const body = new URLSearchParams({date:d, reference:r, description:m, amount:a, cross_account:x,
+    gst_split:gst?'1':'0', gst_type:gstType||'purchase'});
+  try {
+    const resp = await fetch(`/api/quick-entry/${AID}`, {method:'POST', body:body,
+      headers:{'Content-Type':'application/x-www-form-urlencoded'}});
+    const data = await resp.json();
+    if (data.ok) {
+      if (IS_AJE) {
+        sessionStorage.setItem('aje_sticky_date', d);
+        sessionStorage.setItem('aje_sticky_ref', r);
+      }
+      window.location.reload();
+    }
+    else { ss('err', data.error || 'Error'); }
+  } catch(err) { ss('err', 'Network error'); }
+}
+
+async function doGstSplit(splitType) {
+  // F8/F9 on an existing selected transaction: split out GST
+  if (selRow < 0) return;
+  const tr = trs[selRow];
+  const tid = tr.dataset.tid;
+  if (!tid) return;
+  
+  const desc = tr.querySelector('td[data-field="description"]');
+  const descText = desc ? desc.dataset.val : '';
+  const label = splitType === 'purchase' ? 'GST.IN (ITC)' : 'GST.OUT (collected)';
+  
+  if (!confirm(`Split "${descText}" with ${label}?\n\nThis will convert it to a 3-line split (net + 5% GST).\nYou can then edit the expense/revenue account.`)) return;
+  
+  try {
+    const resp = await fetch(`/api/gst-split/${tid}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({type: splitType, from_account: AID})
+    });
+    const data = await resp.json();
+    if (data.ok) {
+      // Open the edit view so user can fix the account
+      const returnUrl = encodeURIComponent(window.location.pathname + window.location.search + '#txn-' + tid);
+      window.location.href = `/transaction/${tid}/edit?from_account=${AID}&return_to=${returnUrl}`;
+    } else {
+      alert(data.error);
+    }
+  } catch(err) { alert('Network error: ' + err); }
+}
+
+function clr() {
+  document.getElementById('er').value = '';
+  document.getElementById('em').value = '';
+  document.getElementById('ea').value = '';
+  document.getElementById('ex').value = '';
+  descDD.classList.remove('open');
+  document.getElementById('em').focus();
+}
+
+function ss(t, m) {
+  document.getElementById('es').innerHTML = `<span class="${t}">${m}</span>`;
+  setTimeout(() => document.getElementById('es').style.opacity = '0.5', 3000);
+}
+
+// Procedures menu handlers
+document.querySelectorAll('.proc-item').forEach(item => {
+  item.addEventListener('click', function() {
+    document.getElementById('procMenu').style.display = 'none';
+    const proc = this.dataset.proc;
+    if (proc === 'move-block') {
+      if (blkStart < 0 && selRow >= 0) {
+        // Auto-start block at current row
+        blkStart = selRow; blkEnd = selRow;
+        updateBlockHighlight();
+      }
+      document.getElementById('blkTarget').focus();
+    }
+  });
+});
+document.addEventListener('click', function(e) {
+  const pm = document.getElementById('procMenu');
+  if (pm.style.display === 'block' && !pm.contains(e.target)) pm.style.display = 'none';
+});
+
+window.addEventListener('load', function() {
+  if (!window.location.hash) {
+    const w = document.getElementById('scroll-wrap');
+    w.scrollTop = w.scrollHeight;
+    document.getElementById('em').focus();
+  }
+});
+
+/* ═══ Bulk Select / Delete ═══ */
+let bulkMode = false;
+let lastCheckedIdx = null;
+
+function toggleBulkMode() {
+  bulkMode = !bulkMode;
+  const btn = document.getElementById('bulk-toggle');
+  const actions = document.getElementById('bulk-actions');
+
+  if (bulkMode) {
+    btn.textContent = '✕ Cancel';
+    btn.style.color = 'var(--neg)';
+    actions.style.display = '';
+    lastCheckedIdx = null;
+    // Add checkboxes to each transaction row
+    document.querySelectorAll('tr.tr').forEach(tr => {
+      const td = tr.querySelector('td');
+      if (!tr.querySelector('.bulk-cb')) {
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'bulk-cb';
+        cb.dataset.tid = tr.dataset.tid;
+        cb.style.cssText = 'margin-right:4px;cursor:pointer;';
+        cb.addEventListener('click', function(e) {
+          const allCbs = [...document.querySelectorAll('.bulk-cb')];
+          const thisIdx = allCbs.indexOf(this);
+          if (e.shiftKey && lastCheckedIdx !== null) {
+            const start = Math.min(lastCheckedIdx, thisIdx);
+            const end = Math.max(lastCheckedIdx, thisIdx);
+            const state = this.checked;
+            for (let i = start; i <= end; i++) {
+              allCbs[i].checked = state;
+            }
+          }
+          lastCheckedIdx = thisIdx;
+          updateBulkCount();
+        });
+        td.insertBefore(cb, td.firstChild);
+      }
+    });
+    updateBulkCount();
+  } else {
+    btn.textContent = 'Select ✓';
+    btn.style.color = '';
+    actions.style.display = 'none';
+    lastCheckedIdx = null;
+    document.querySelectorAll('.bulk-cb').forEach(cb => cb.remove());
+  }
+}
+
+function bulkSelectAll() {
+  document.querySelectorAll('.bulk-cb').forEach(cb => cb.checked = true);
+  updateBulkCount();
+}
+function bulkSelectNone() {
+  document.querySelectorAll('.bulk-cb').forEach(cb => cb.checked = false);
+  updateBulkCount();
+}
+function updateBulkCount() {
+  const checked = document.querySelectorAll('.bulk-cb:checked').length;
+  const total = document.querySelectorAll('.bulk-cb').length;
+  document.getElementById('bulk-count').textContent = checked ? checked + ' of ' + total + ' selected' : '';
+}
+
+function bulkDelete() {
+  const checked = document.querySelectorAll('.bulk-cb:checked');
+  if (!checked.length) { alert('No transactions selected'); return; }
+  
+  // Collect unique txn IDs
+  const ids = [...new Set([...checked].map(cb => parseInt(cb.dataset.tid)))];
+  
+  if (!confirm('Delete ' + ids.length + ' transaction(s)?\\n\\nThis cannot be undone.')) return;
+  
+  fetch('/api/bulk-delete', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({txn_ids: ids})
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      window.location.reload();
+    } else {
+      alert(d.error);
+    }
+  });
+}
+/* ═══ Stripe Deposit Procedure ═══ */
+let stripeCustomers = [];
+let stripeFeeAcct = 'EX.CC';
+let stripeRowCount = 0;
+
+function openStripeDeposit() {
+  document.getElementById('procMenu').style.display = 'none';
+  fetch('/api/stripe-config').then(r => r.json()).then(cfg => {
+    stripeFeeAcct = cfg.fee_account || 'EX.CC';
+    stripeCustomers = cfg.customers || [];
+    document.getElementById('stripeFeeLabel').textContent = stripeFeeAcct;
+    document.getElementById('stripeDate').value = '{{ today }}';
+    document.getElementById('stripeExpected').value = '';
+    document.getElementById('stripeLines').innerHTML = '';
+    stripeRowCount = 0;
+    for (let i = 0; i < 3; i++) stripeAddRow();
+    document.getElementById('stripeStatus').textContent = '';
+    document.getElementById('stripePostBtn').disabled = false;
+    document.getElementById('stripeDiffBadge').style.display = 'none';
+    stripeRecalcTotals();
+    document.getElementById('stripeModal').style.display = 'flex';
+    setTimeout(() => {
+      const first = document.querySelector('#stripeLines input[data-field="customer"]');
+      if (first) first.focus();
+    }, 100);
+  });
+}
+
+function closeStripeDeposit() {
+  document.getElementById('stripeModal').style.display = 'none';
+}
+
+function stripeAddRow() {
+  stripeRowCount++;
+  const n = stripeRowCount;
+  const tr = document.createElement('tr');
+  tr.id = 'stripe-row-' + n;
+  tr.style.borderBottom = '1px solid var(--border-light)';
+  tr.innerHTML = `
+    <td style="padding:4px 6px;color:var(--muted);font-size:10px;text-align:center">${n}</td>
+    <td style="padding:4px 6px;position:relative">
+      <input data-field="customer" data-row="${n}" type="text"
+        placeholder="e.g. R.SMIJOH"
+        style="width:100%;font-family:var(--mono);font-size:12px;padding:3px 6px;text-transform:uppercase"
+        oninput="stripeCustomerSearch(this,${n})" onfocus="stripeCustomerSearch(this,${n})"
+        onkeydown="stripeCustomerKey(event,this,${n})" autocomplete="off">
+      <div id="stripe-dd-${n}" class="stripe-dropdown" style="display:none;position:absolute;top:100%;left:6px;right:6px;z-index:10;background:var(--surface);border:1px solid var(--border);border-radius:4px;box-shadow:0 4px 12px rgba(0,0,0,.2);max-height:180px;overflow-y:auto;font-size:12px"></div>
+    </td>
+    <td style="padding:4px 6px">
+      <input data-field="description" data-row="${n}" type="text"
+        placeholder="INVC.4440"
+        style="width:100%;font-size:12px;padding:3px 6px">
+    </td>
+    <td style="padding:4px 6px">
+      <input data-field="gross" data-row="${n}" type="text"
+        placeholder="483.00"
+        style="width:100%;font-family:var(--mono);font-size:12px;padding:3px 6px;text-align:right"
+        oninput="stripeCalcRow(${n})" onchange="stripeCalcRow(${n})">
+    </td>
+    <td style="padding:4px 6px">
+      <input data-field="fee" data-row="${n}" type="text"
+        placeholder="14.31"
+        style="width:100%;font-family:var(--mono);font-size:12px;padding:3px 6px;text-align:right"
+        oninput="stripeCalcRow(${n})" onchange="stripeCalcRow(${n})">
+    </td>
+    <td style="padding:4px 8px;font-family:var(--mono);font-size:12px;text-align:right;color:var(--muted)" id="stripe-net-${n}">—</td>
+    <td style="padding:4px 2px;text-align:center">
+      <button onclick="stripeRemoveRow(${n})" style="background:none;border:none;cursor:pointer;color:var(--muted);font-size:14px" title="Remove line">&times;</button>
+    </td>`;
+  document.getElementById('stripeLines').appendChild(tr);
+  // Tab out of last fee field → auto-add row
+  const feeInput = tr.querySelector('[data-field="fee"]');
+  feeInput.addEventListener('keydown', function(e) {
+    if (e.key === 'Tab' && !e.shiftKey) {
+      const allRows = document.querySelectorAll('#stripeLines tr');
+      const lastRow = allRows[allRows.length - 1];
+      if (tr === lastRow) {
+        const hasData = tr.querySelector('[data-field="customer"]').value.trim() ||
+                        tr.querySelector('[data-field="gross"]').value.trim();
+        if (hasData) stripeAddRow();
+      }
+    }
+  });
+}
+
+function stripeRemoveRow(n) {
+  const row = document.getElementById('stripe-row-' + n);
+  if (row) { row.remove(); stripeRecalcTotals(); }
+}
+
+function stripeCalcRow(n) {
+  const g = parseFloat((document.querySelector(`[data-field="gross"][data-row="${n}"]`)?.value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+  const f = parseFloat((document.querySelector(`[data-field="fee"][data-row="${n}"]`)?.value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+  const netEl = document.getElementById('stripe-net-' + n);
+  if (netEl) netEl.textContent = (g - f).toFixed(2);
+  stripeRecalcTotals();
+}
+
+function stripeRecalcTotals() {
+  let totG = 0, totF = 0, totN = 0;
+  document.querySelectorAll('#stripeLines tr').forEach(tr => {
+    const g = parseFloat((tr.querySelector('[data-field="gross"]')?.value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+    const f = parseFloat((tr.querySelector('[data-field="fee"]')?.value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+    totG += g; totF += f; totN += (g - f);
+  });
+  document.getElementById('stripeTotGross').textContent = totG.toFixed(2);
+  document.getElementById('stripeTotFee').textContent = totF.toFixed(2);
+  document.getElementById('stripeTotNet').textContent = totN.toFixed(2);
+  document.getElementById('stripeNetTotal').textContent = totN.toFixed(2);
+  // Compare to expected
+  const exp = parseFloat((document.getElementById('stripeExpected').value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+  const badge = document.getElementById('stripeDiffBadge');
+  if (exp > 0) {
+    const diff = totN - exp;
+    badge.style.display = 'inline-block';
+    badge.style.marginTop = '4px';
+    if (Math.abs(diff) < 0.005) {
+      badge.style.background = '#2a7a2a'; badge.style.color = '#fff';
+      badge.textContent = '✓ Balanced';
+    } else {
+      badge.style.background = '#c33'; badge.style.color = '#fff';
+      badge.textContent = 'Off by ' + diff.toFixed(2);
+    }
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+/* ── Customer autocomplete ── */
+let stripeDropdownSel = -1;
+
+function stripeCustomerSearch(input, row) {
+  const q = input.value.trim().toUpperCase();
+  const dd = document.getElementById('stripe-dd-' + row);
+  if (q.length < 1) { dd.style.display = 'none'; return; }
+  // Search preloaded AR customers first
+  let matches = stripeCustomers.filter(c =>
+    c.name.toUpperCase().includes(q) || (c.description || '').toUpperCase().includes(q)
+  ).slice(0, 12);
+  if (matches.length === 0) {
+    fetch('/api/account-search?q=' + encodeURIComponent(q) + '&posting=1')
+      .then(r => r.json()).then(accts => stripeRenderDropdown(dd, accts, row));
+    return;
+  }
+  stripeRenderDropdown(dd, matches, row);
+}
+
+function stripeRenderDropdown(dd, items, row) {
+  if (items.length === 0) { dd.style.display = 'none'; return; }
+  stripeDropdownSel = -1;
+  dd.innerHTML = items.map((c, i) =>
+    `<div class="stripe-dd-item" data-idx="${i}" style="padding:4px 8px;cursor:pointer;border-bottom:1px solid var(--border-light)"
+      onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background=''"
+      onclick="stripeSelectCustomer('${c.name}',${row})">
+      <span style="font-family:var(--mono);font-weight:600">${c.name}</span>
+      ${c.description ? `<span style="color:var(--muted);margin-left:6px;font-size:11px">${c.description}</span>` : ''}
+    </div>`
+  ).join('');
+  dd.style.display = 'block';
+}
+
+function stripeCustomerKey(e, input, row) {
+  const dd = document.getElementById('stripe-dd-' + row);
+  const items = dd.querySelectorAll('.stripe-dd-item');
+  if (dd.style.display !== 'block' || items.length === 0) {
+    if (e.key === 'Tab' && !e.shiftKey) {
+      // Jump to description field
+      const desc = document.querySelector(`[data-field="description"][data-row="${row}"]`);
+      if (desc) { e.preventDefault(); desc.focus(); }
+    }
+    return;
+  }
+  if (e.key === 'ArrowDown') {
+    e.preventDefault();
+    stripeDropdownSel = Math.min(stripeDropdownSel + 1, items.length - 1);
+    items.forEach((el, i) => el.style.background = i === stripeDropdownSel ? 'var(--accent-bg)' : '');
+  } else if (e.key === 'ArrowUp') {
+    e.preventDefault();
+    stripeDropdownSel = Math.max(stripeDropdownSel - 1, 0);
+    items.forEach((el, i) => el.style.background = i === stripeDropdownSel ? 'var(--accent-bg)' : '');
+  } else if (e.key === 'Enter' && stripeDropdownSel >= 0) {
+    e.preventDefault();
+    const name = items[stripeDropdownSel].querySelector('span').textContent;
+    stripeSelectCustomer(name, row);
+  } else if (e.key === 'Escape') {
+    dd.style.display = 'none';
+  }
+}
+
+function stripeSelectCustomer(name, row) {
+  document.querySelector(`[data-field="customer"][data-row="${row}"]`).value = name;
+  document.getElementById('stripe-dd-' + row).style.display = 'none';
+  // Focus the gross field (skip description — user can fill it optionally)
+  const gross = document.querySelector(`[data-field="gross"][data-row="${row}"]`);
+  if (gross) gross.focus();
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#stripeModal')) return;
+  document.querySelectorAll('.stripe-dropdown').forEach(dd => {
+    if (!dd.parentElement.contains(e.target)) dd.style.display = 'none';
+  });
+});
+
+/* ── Post batch ── */
+function stripePost() {
+  const dateStr = document.getElementById('stripeDate').value.trim();
+  if (!dateStr) { alert('Enter the deposit date (yyyy-mm-dd)'); return; }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { alert('Date must be yyyy-mm-dd format'); return; }
+
+  const items = [];
+  document.querySelectorAll('#stripeLines tr').forEach(tr => {
+    const cust = (tr.querySelector('[data-field="customer"]')?.value || '').trim();
+    const grossStr = (tr.querySelector('[data-field="gross"]')?.value || '').trim();
+    const feeStr = (tr.querySelector('[data-field="fee"]')?.value || '').trim();
+    const invRef = (tr.querySelector('[data-field="description"]')?.value || '').trim();
+    if (cust && grossStr) {
+      // Description for each distribution line: "Stripe pmt" or "Stripe pmt — INVC.4440"
+      let desc = 'Stripe pmt';
+      if (invRef) desc += ' \u2014 ' + invRef;
+      items.push({ customer: cust, gross: grossStr, fee: feeStr || '0', description: desc });
+    }
+  });
+
+  if (items.length === 0) { alert('No complete lines to post.\nEach line needs at least a Client AR Account and Gross Charge.'); return; }
+
+  // Warn if totals don't match expected
+  const exp = parseFloat((document.getElementById('stripeExpected').value || '0').replace(/[^0-9.\-]/g, '')) || 0;
+  if (exp > 0) {
+    let totN = 0;
+    items.forEach(it => {
+      const g = parseFloat(it.gross.replace(/[^0-9.\-]/g, '')) || 0;
+      const f = parseFloat(it.fee.replace(/[^0-9.\-]/g, '')) || 0;
+      totN += g - f;
+    });
+    if (Math.abs(totN - exp) > 0.005) {
+      if (!confirm('Net total (' + totN.toFixed(2) + ') does not match expected deposit (' + exp.toFixed(2) + ').\nDifference: ' + (totN - exp).toFixed(2) + '\n\nPost anyway?')) return;
+    }
+  }
+
+  document.getElementById('stripePostBtn').disabled = true;
+  document.getElementById('stripeStatus').textContent = 'Posting...';
+
+  fetch('/api/stripe-post', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      date: dateStr,
+      items: items,
+      clearing_account_id: {{ account.id }},
+      fee_account: stripeFeeAcct
+    })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      let msg = 'Posted 1 distribution entry (' + d.posted + ' charges).\n\n';
+      msg += 'Gross: ' + d.total_gross + '\nFees: ' + d.total_fees + '\nNet to clearing: ' + d.total_net;
+      if (d.errors.length > 0) msg += '\n\nWarnings:\n' + d.errors.join('\n');
+      alert(msg);
+      closeStripeDeposit();
+      window.location.reload();
+    } else {
+      document.getElementById('stripeStatus').textContent = '';
+      document.getElementById('stripePostBtn').disabled = false;
+      let msg = d.error || 'Failed to post';
+      if (d.errors && d.errors.length > 0) msg += '\n' + d.errors.join('\n');
+      alert(msg);
+    }
+  }).catch(err => {
+    document.getElementById('stripeStatus').textContent = '';
+    document.getElementById('stripePostBtn').disabled = false;
+    alert('Error: ' + err.message);
+  });
+}
+
+// Escape closes stripe modal
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && document.getElementById('stripeModal').style.display === 'flex') {
+    closeStripeDeposit();
+    e.preventDefault();
+  }
+  if (e.key === 'Escape' && document.getElementById('cswModal').style.display === 'flex') {
+    closeCswImport();
+    e.preventDefault();
+  }
+});
+
+/* ═══ CaseWare AJE Import ═══ */
+let cswCacheKey = '';
+let cswEntries = [];
+let cswCswAccounts = [];
+let cswSuggestions = {};
+
+function openCswImport() {
+  document.getElementById('procMenu').style.display = 'none';
+  document.getElementById('cswFile').value = '';
+  document.getElementById('cswPrefix').value = '{{ default_prefix|default("AJE", true) }}';
+  document.getElementById('cswParseStatus').textContent = '';
+  document.getElementById('cswStep2').style.display = 'none';
+  document.getElementById('cswStep1').style.display = '';
+  document.getElementById('cswImportBtn').disabled = true;
+  document.getElementById('cswImportBtn').textContent = 'Import 0 Entries';
+  document.getElementById('cswStatus').textContent = '';
+  document.getElementById('cswMapBody').innerHTML = '';
+  document.getElementById('cswPreviewBody').innerHTML = '';
+  cswCacheKey = '';
+  cswEntries = [];
+  cswCswAccounts = [];
+  cswSuggestions = {};
+  document.getElementById('cswModal').style.display = 'flex';
+}
+
+function closeCswImport() {
+  document.getElementById('cswModal').style.display = 'none';
+}
+
+function cswParse() {
+  const fileInput = document.getElementById('cswFile');
+  if (!fileInput.files.length) { alert('Select a file first'); return; }
+
+  const btn = document.getElementById('cswParseBtn');
+  btn.disabled = true;
+  document.getElementById('cswParseStatus').textContent = 'Parsing...';
+
+  const formData = new FormData();
+  formData.append('file', fileInput.files[0]);
+
+  fetch('/api/parse-csw-aje', {method: 'POST', body: formData})
+    .then(r => r.json())
+    .then(d => {
+      btn.disabled = false;
+      if (!d.ok) {
+        document.getElementById('cswParseStatus').innerHTML = '<span style="color:var(--neg)">' + d.error + '</span>';
+        return;
+      }
+      cswCacheKey = d.cache_key;
+      cswEntries = d.entries;
+      cswCswAccounts = d.csw_accounts;
+      cswSuggestions = d.suggestions;
+
+      // Set default prefix from server if not already set by user
+      const prefixInput = document.getElementById('cswPrefix');
+      if (!prefixInput.value) prefixInput.value = d.default_prefix || 'AJE';
+
+      document.getElementById('cswParseStatus').innerHTML =
+        '<span style="color:var(--pos)">Parsed ' + d.entry_count + ' entries (' + d.format.toUpperCase() + ' format)</span>';
+
+      // Build mapping table
+      cswBuildMapTable();
+      // Build preview
+      cswBuildPreview();
+
+      document.getElementById('cswStep2').style.display = '';
+      cswCheckReady();
+    })
+    .catch(err => {
+      btn.disabled = false;
+      document.getElementById('cswParseStatus').innerHTML = '<span style="color:var(--neg)">Error: ' + err.message + '</span>';
+    });
+}
+
+function cswBuildMapTable() {
+  const tbody = document.getElementById('cswMapBody');
+  tbody.innerHTML = '';
+  cswCswAccounts.forEach((csw, idx) => {
+    const tr = document.createElement('tr');
+    const match = cswSuggestions[csw.name];
+    const matched = match && match.id;
+    tr.style.borderBottom = '1px solid var(--border)';
+    if (!matched) tr.style.background = 'rgba(255,80,80,.08)';
+    tr.innerHTML =
+      '<td style="padding:4px 6px;font-size:11px">' + csw.name + '</td>' +
+      '<td style="padding:4px 6px;font-size:11px;color:var(--muted)">' + (csw.number || '') + '</td>' +
+      '<td style="padding:4px 6px;text-align:center;color:var(--muted)">&rarr;</td>' +
+      '<td style="padding:4px 6px;position:relative">' +
+        '<input type="text" class="csw-map-input" data-csw="' + csw.name.replace(/"/g, '&quot;') + '" ' +
+          'value="' + (matched ? match.name : '') + '" ' +
+          (matched ? 'data-id="' + match.id + '"' : '') +
+          ' style="width:100%;font-size:11px;padding:2px 4px;font-family:var(--mono);' +
+          (!matched ? 'border-color:var(--neg);' : '') + '" ' +
+          'oninput="cswSearchAccount(this)" onfocus="cswSearchAccount(this)">' +
+        '<div class="csw-acct-dd" style="display:none;position:absolute;z-index:10;background:var(--surface);border:1px solid var(--border);border-radius:4px;max-height:160px;overflow-y:auto;width:calc(100% - 12px);box-shadow:0 4px 12px rgba(0,0,0,.2);font-size:11px"></div>' +
+      '</td>';
+    tbody.appendChild(tr);
+  });
+}
+
+let cswSearchTimeout = null;
+function cswSearchAccount(input) {
+  clearTimeout(cswSearchTimeout);
+  const dd = input.parentElement.querySelector('.csw-acct-dd');
+  const q = input.value.trim();
+  if (q.length < 1) { dd.style.display = 'none'; return; }
+  cswSearchTimeout = setTimeout(() => {
+    fetch('/api/account-search?q=' + encodeURIComponent(q) + '&posting=1')
+      .then(r => r.json())
+      .then(accounts => {
+        dd.innerHTML = '';
+        if (!accounts.length) { dd.style.display = 'none'; return; }
+        accounts.slice(0, 15).forEach(a => {
+          const item = document.createElement('div');
+          item.style.cssText = 'padding:3px 6px;cursor:pointer';
+          item.onmouseover = function() { this.style.background = 'var(--accent-bg)'; };
+          item.onmouseout = function() { this.style.background = ''; };
+          item.textContent = a.name + ' — ' + a.description;
+          item.onclick = function() {
+            input.value = a.name;
+            input.dataset.id = a.id;
+            input.style.borderColor = '';
+            input.parentElement.closest('tr').style.background = '';
+            dd.style.display = 'none';
+            cswCheckReady();
+            cswBuildPreview();
+          };
+          dd.appendChild(item);
+        });
+        dd.style.display = 'block';
+      });
+  }, 150);
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#cswModal')) return;
+  document.querySelectorAll('.csw-acct-dd').forEach(dd => {
+    if (!dd.parentElement.contains(e.target)) dd.style.display = 'none';
+  });
+});
+
+function cswGetAccountMap() {
+  const map = {};
+  document.querySelectorAll('.csw-map-input').forEach(input => {
+    const csw = input.dataset.csw;
+    const id = input.dataset.id;
+    const name = input.value.trim();
+    if (id && name) map[csw] = {id: parseInt(id), name: name};
+  });
+  return map;
+}
+
+function cswCheckReady() {
+  const map = cswGetAccountMap();
+  const allMapped = cswCswAccounts.every(csw => map[csw.name]);
+  const btn = document.getElementById('cswImportBtn');
+  btn.disabled = !allMapped;
+  btn.textContent = 'Import ' + cswEntries.length + ' Entries';
+  if (!allMapped) {
+    const unmapped = cswCswAccounts.filter(csw => !map[csw.name]).length;
+    document.getElementById('cswStatus').textContent = unmapped + ' account(s) still need mapping';
+    document.getElementById('cswStatus').style.color = 'var(--neg)';
+  } else {
+    document.getElementById('cswStatus').textContent = 'All accounts mapped — ready to import';
+    document.getElementById('cswStatus').style.color = 'var(--pos)';
+  }
+}
+
+function cswFmtMoney(cents) {
+  if (!cents) return '';
+  const abs = Math.abs(cents);
+  const dollars = Math.floor(abs / 100);
+  const c = (abs % 100).toString().padStart(2, '0');
+  return dollars.toLocaleString() + '.' + c;
+}
+
+function cswBuildPreview() {
+  const tbody = document.getElementById('cswPreviewBody');
+  tbody.innerHTML = '';
+  const map = cswGetAccountMap();
+  const prefix = document.getElementById('cswPrefix').value || 'AJE';
+
+  cswEntries.forEach((entry, idx) => {
+    const ref = prefix + entry.num;
+    // Entry header row
+    const hdr = document.createElement('tr');
+    hdr.style.cssText = 'background:var(--surface-raised);font-weight:600;' + (idx > 0 ? 'border-top:2px solid var(--border);' : '');
+    hdr.innerHTML =
+      '<td style="padding:3px 6px;font-family:var(--mono)">' + ref + '</td>' +
+      '<td style="padding:3px 6px">' + entry.date + '</td>' +
+      '<td colspan="3" style="padding:3px 6px">' + (entry.description || '').substring(0, 60) + '</td>';
+    tbody.appendChild(hdr);
+
+    // Detail lines
+    entry.lines.forEach(line => {
+      const tr = document.createElement('tr');
+      const gridName = (map[line.csw_account] || {}).name || '???';
+      const amt = line.amount_cents;
+      tr.innerHTML =
+        '<td style="padding:2px 6px"></td>' +
+        '<td style="padding:2px 6px"></td>' +
+        '<td style="padding:2px 6px;font-size:10px;color:var(--muted)">' + gridName + ' <span style="color:var(--muted);font-size:9px">(' + line.csw_account.substring(0, 30) + ')</span></td>' +
+        '<td style="padding:2px 6px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--pos)">' + (amt > 0 ? cswFmtMoney(amt) : '') + '</td>' +
+        '<td style="padding:2px 6px;text-align:right;font-family:var(--mono);font-size:11px;color:var(--neg)">' + (amt < 0 ? '(' + cswFmtMoney(amt) + ')' : '') + '</td>';
+      tbody.appendChild(tr);
+    });
+  });
+}
+
+function cswImport() {
+  const map = cswGetAccountMap();
+  const allMapped = cswCswAccounts.every(csw => map[csw.name]);
+  if (!allMapped) { alert('All accounts must be mapped before importing.'); return; }
+
+  const prefix = document.getElementById('cswPrefix').value.trim();
+  if (!prefix) { alert('Enter an AJE ref prefix (e.g. 25AJE)'); return; }
+
+  if (!confirm('Import ' + cswEntries.length + ' AJE entries with prefix "' + prefix + '"?')) return;
+
+  const acctMap = {};
+  for (const [csw, info] of Object.entries(map)) {
+    acctMap[csw] = info.id;
+  }
+
+  document.getElementById('cswImportBtn').disabled = true;
+  document.getElementById('cswStatus').textContent = 'Importing...';
+  document.getElementById('cswStatus').style.color = 'var(--muted)';
+
+  fetch('/api/import-csw-aje', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      cache_key: cswCacheKey,
+      account_map: acctMap,
+      ref_prefix: prefix
+    })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) {
+      let msg = 'Import complete!\n\nPosted: ' + d.posted;
+      if (d.skipped) msg += '\nSkipped: ' + d.skipped;
+      if (d.errors && d.errors.length) {
+        msg += '\n\nErrors:\n';
+        d.errors.forEach(e => { msg += e.entry + ': ' + e.reason + '\n'; });
+      }
+      alert(msg);
+      closeCswImport();
+      window.location.reload();
+    } else {
+      document.getElementById('cswImportBtn').disabled = false;
+      document.getElementById('cswStatus').textContent = '';
+      alert(d.error || 'Import failed');
+    }
+  }).catch(err => {
+    document.getElementById('cswImportBtn').disabled = false;
+    document.getElementById('cswStatus').textContent = '';
+    alert('Error: ' + err.message);
+  });
+}
+
+
+</script>
+{% endblock %}

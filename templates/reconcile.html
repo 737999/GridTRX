@@ -1,0 +1,244 @@
+{% extends "base.html" %}
+{% block title %}Reconcile — {{ account.name }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>
+  {% if parent_report %}
+  <a href="/report/{{ parent_report.id }}">{{ parent_report.description or parent_report.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  <a href="/ledger/{{ account.id }}{% if from_report %}?from_report={{ from_report }}{% endif %}">{{ account.name }}</a><span class="sep">▸</span>
+  Reconcile
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .rec-summary {
+    display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:16px;
+    font-size:12px;
+  }
+  .rec-box {
+    background:var(--surface); border:1px solid var(--border); border-radius:4px;
+    padding:10px 14px;
+  }
+  .rec-box .label { font-size:10px; text-transform:uppercase; font-weight:700; color:var(--muted); margin-bottom:4px; }
+  .rec-box .amt { font-size:18px; font-family:var(--mono); font-weight:600; }
+  .rec-box .amt.zero { color:var(--faint); }
+  .rec-box.match { border-color:var(--accent); }
+  .rec-box.off { border-color:#cc8888; }
+
+  .stmt-form { display:flex; align-items:center; gap:8px; margin-bottom:16px; font-size:12px; }
+  .stmt-form input { font-family:var(--mono); font-size:13px; padding:4px 8px; width:140px;
+    border:1px solid var(--border); border-radius:2px; background:var(--surface); color:var(--text); text-align:right; }
+  .stmt-form input:focus { outline:none; border-color:var(--accent); }
+
+  .rec-table { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); }
+  .rec-table th { text-align:left; padding:3px 6px; font-size:10px; text-transform:uppercase;
+    color:var(--muted); font-weight:600; border-bottom:2px solid var(--border); position:sticky; top:0; background:var(--bg); z-index:2; }
+  .rec-table th.r { text-align:right; }
+  .rec-table td { padding:2px 6px; border-bottom:1px solid var(--border-light); white-space:nowrap; }
+  .rec-table td.r { text-align:right; font-variant-numeric:tabular-nums; }
+  .rec-table tr:hover { background:var(--surface-raised); }
+  .rec-table tr.just-cleared { opacity:0.5; }
+
+  .ck { width:16px; height:16px; cursor:pointer; accent-color:var(--accent); vertical-align:middle; }
+  .section-hdr { font-size:11px; font-weight:700; text-transform:uppercase; color:var(--muted);
+    padding:10px 0 4px; border-bottom:1px solid var(--border); margin-top:12px; display:flex; justify-content:space-between; }
+
+  .rec-scroll { max-height:50vh; overflow-y:auto; }
+</style>
+
+<!-- Statement Balance Input -->
+<div class="stmt-form">
+  <label style="font-weight:600">Statement Balance:</label>
+  <form method="get" style="display:flex;gap:6px;align-items:center" id="stmtForm">
+    {% if from_report %}<input type="hidden" name="from_report" value="{{ from_report }}">{% endif %}
+    <input type="text" name="stmt" id="stmtInput" value="{{ stmt_bal }}" placeholder="0.00" autofocus>
+    <button type="submit" class="btn btn-sm btn-primary">Set</button>
+  </form>
+  <span style="color:var(--muted);font-size:11px;margin-left:8px">Enter the closing balance from your bank statement</span>
+</div>
+
+<!-- Summary Boxes -->
+<div class="rec-summary">
+  <div class="rec-box">
+    <div class="label">Book Balance</div>
+    <div class="amt" id="bookBal">{{ summary.book_balance|money }}</div>
+  </div>
+  <div class="rec-box">
+    <div class="label">Cleared Balance</div>
+    <div class="amt" id="clearedBal">{{ summary.cleared_balance|money }}</div>
+  </div>
+  <div class="rec-box {% if diff is not none %}{% if diff == 0 %}match{% else %}off{% endif %}{% endif %}" id="diffBox">
+    <div class="label">{% if diff is not none %}Difference{% else %}Uncleared{% endif %}</div>
+    <div class="amt {% if diff is none and summary.uncleared == 0 %}zero{% endif %}" id="diffAmt">
+      {% if diff is not none %}{{ diff|money }}{% else %}{{ summary.uncleared|money }}{% endif %}
+    </div>
+    {% if diff is not none and diff == 0 %}
+    <div style="font-size:10px;color:var(--accent);margin-top:2px">✓ Reconciled</div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Outstanding Items -->
+<div class="section-hdr">
+  <span>Outstanding Items ({{ outstanding|length }})</span>
+  <span id="outTotal" style="font-family:var(--mono)">
+    {% set ns = namespace(total=0) %}
+    {% for e in outstanding %}{% set ns.total = ns.total + e.amount %}{% endfor %}
+    {{ ns.total|money }}
+  </span>
+</div>
+<div class="rec-scroll">
+<table class="rec-table">
+  <thead>
+    <tr>
+      <th style="width:22px">✓</th>
+      <th style="width:85px">Date</th>
+      <th style="width:60px">Ref</th>
+      <th>Description</th>
+      <th style="width:80px">Account</th>
+      <th class="r" style="width:100px">Amount</th>
+    </tr>
+  </thead>
+  <tbody id="outBody">
+    {% for e in outstanding %}
+    <tr data-lid="{{ e.line_id }}" data-amt="{{ e.amount }}">
+      <td><input type="checkbox" class="ck" data-lid="{{ e.line_id }}" onchange="toggleRec(this)"></td>
+      <td>{{ e.date }}</td>
+      <td>{{ e.reference }}</td>
+      <td>{{ e.description }}</td>
+      <td>{{ e.cross_accounts }}</td>
+      <td class="r">{{ e.amount|money }}</td>
+    </tr>
+    {% endfor %}
+    {% if not outstanding %}
+    <tr><td colspan="6" style="padding:12px;text-align:center;color:var(--muted)">All items cleared</td></tr>
+    {% endif %}
+  </tbody>
+</table>
+</div>
+
+<!-- Cleared Items (collapsed by default) -->
+<details style="margin-top:8px">
+  <summary class="section-hdr" style="cursor:pointer;list-style:none">
+    <span>Cleared Items ({{ cleared|length }}) ▾</span>
+    <span style="font-family:var(--mono)">{{ summary.cleared_balance|money }}</span>
+  </summary>
+  <div class="rec-scroll">
+  <table class="rec-table">
+    <thead>
+      <tr>
+        <th style="width:22px">✓</th>
+        <th style="width:85px">Date</th>
+        <th style="width:60px">Ref</th>
+        <th>Description</th>
+        <th style="width:80px">Account</th>
+        <th class="r" style="width:100px">Amount</th>
+      </tr>
+    </thead>
+    <tbody id="clrBody">
+      {% for e in cleared %}
+      <tr data-lid="{{ e.line_id }}" data-amt="{{ e.amount }}">
+        <td><input type="checkbox" class="ck" data-lid="{{ e.line_id }}" checked onchange="toggleRec(this)"></td>
+        <td>{{ e.date }}</td>
+        <td>{{ e.reference }}</td>
+        <td>{{ e.description }}</td>
+        <td>{{ e.cross_accounts }}</td>
+        <td class="r">{{ e.amount|money }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</details>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+const SIGN = {{ 1 if account.normal_balance == 'D' else -1 }};
+
+async function toggleRec(cb) {
+  const lid = cb.dataset.lid;
+  const row = cb.closest('tr');
+  
+  const r = await fetch('/api/reconcile-toggle/' + lid, {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) return;
+  
+  // Update summary boxes
+  document.getElementById('bookBal').textContent = fmtMoney(d.book_balance);
+  document.getElementById('clearedBal').textContent = fmtMoney(d.cleared_balance);
+  
+  // Update difference
+  const stmtVal = document.getElementById('stmtInput').value.trim();
+  const diffBox = document.getElementById('diffBox');
+  const diffAmt = document.getElementById('diffAmt');
+  if (stmtVal) {
+    const stmtCents = parseMoney(stmtVal);
+    const diff = (stmtCents * SIGN) - d.cleared_balance;
+    diffAmt.textContent = fmtMoney(diff);
+    diffBox.className = 'rec-box ' + (diff === 0 ? 'match' : 'off');
+    // Show reconciled indicator
+    let indicator = diffBox.querySelector('.rec-indicator');
+    if (diff === 0) {
+      if (!indicator) {
+        indicator = document.createElement('div');
+        indicator.className = 'rec-indicator';
+        indicator.style.cssText = 'font-size:10px;color:var(--accent);margin-top:2px';
+        indicator.textContent = '✓ Reconciled';
+        diffBox.appendChild(indicator);
+      }
+    } else if (indicator) {
+      indicator.remove();
+    }
+  } else {
+    diffAmt.textContent = fmtMoney(d.uncleared);
+  }
+  
+  // Move row between tables with fade
+  row.classList.add('just-cleared');
+  setTimeout(() => {
+    if (d.reconciled) {
+      // Move from outstanding to cleared
+      document.getElementById('clrBody').appendChild(row);
+    } else {
+      // Move from cleared to outstanding
+      document.getElementById('outBody').appendChild(row);
+    }
+    row.classList.remove('just-cleared');
+    updateCounts();
+  }, 300);
+}
+
+function updateCounts() {
+  const outRows = document.querySelectorAll('#outBody tr[data-lid]');
+  const clrRows = document.querySelectorAll('#clrBody tr[data-lid]');
+  // Update section headers
+  const outHdr = document.querySelector('.section-hdr span');
+  if (outHdr) outHdr.textContent = 'Outstanding Items (' + outRows.length + ')';
+  
+  // Update outstanding total
+  let outTotal = 0;
+  outRows.forEach(r => outTotal += parseInt(r.dataset.amt || '0'));
+  const outEl = document.getElementById('outTotal');
+  if (outEl) outEl.textContent = fmtMoney(outTotal);
+}
+
+function parseMoney(s) {
+  s = s.replace(/[$,\s]/g, '').replace(/\((.+)\)/, '-$1');
+  return Math.round(parseFloat(s || '0') * 100);
+}
+
+function fmtMoney(cents) {
+  const neg = cents < 0;
+  const abs = Math.abs(cents);
+  const dollars = Math.floor(abs / 100);
+  const c = (abs % 100).toString().padStart(2, '0');
+  const formatted = dollars.toLocaleString('en-US') + '.' + c;
+  return neg ? '(' + formatted + ')' : formatted;
+}
+</script>
+{% endblock %}

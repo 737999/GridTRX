@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8">
+<title>{{ report.description or report.name }} — {{ company }}</title>
+<style>
+  @page { margin: 0.5in 0.4in; size: letter portrait; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: 'JetBrains Mono', 'Consolas', 'Courier New', monospace;
+    font-size: 9px; line-height: 1.25; color: #000; }
+  .hdr { text-align:center; margin-bottom:8px; }
+  .hdr h1 { font-size:12px; margin:0; }
+  .hdr .sub { font-size:8px; color:#666; }
+  table { width:100%; border-collapse:collapse; }
+  th { text-align:left; font-size:8px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.3px; border-bottom:2px solid #000; padding:1px 3px; color:#444; }
+  th.r { text-align:right; }
+  th.spacer { border-bottom:none; }
+  td { padding:0.5px 3px; font-size:9px; vertical-align:top; }
+  td.r { text-align:right; font-family:inherit; }
+  td.spacer-cell { width:8px; padding:0; border-bottom:none; }
+  .lbl td { font-weight:700; padding-top:5px; padding-bottom:0; }
+  .lbl-empty td { padding:2px 0; }
+  .sep-single td.line { border-bottom:1px solid #000; padding:0; height:1px; }
+  .sep-double td.line { border-bottom:3px double #000; padding:0; height:1px; }
+  .sep-blank td { padding:1px 0; }
+  .tot td { font-weight:700; }
+  .indent-0 { padding-left:3px !important; }
+  .indent-1 { padding-left:14px !important; }
+  .indent-2 { padding-left:25px !important; }
+  .indent-3 { padding-left:36px !important; }
+  .foot { margin-top:10px; font-size:7px; color:#888; display:flex; justify-content:space-between; }
+  @media print {
+    .no-print { display:none !important; }
+  }
+  /* Multi-column: shrink amount columns to fit portrait */
+  {% if multicol %}
+  td.r, th.r { font-size:8px; white-space:nowrap; }
+  {% endif %}
+</style>
+</head>
+<body>
+<div class="no-print" style="padding:6px;background:#eee;text-align:center;font-size:11px">
+  <button onclick="window.print()" style="font-size:12px;padding:4px 16px;cursor:pointer">Print</button>
+  &nbsp; Use browser Print (Ctrl+P) or ClawPDF to save as PDF
+</div>
+
+<div class="hdr">
+  <h1>{{ company }}</h1>
+  <div class="sub">{{ report.description or report.name }}
+    {% if not multicol and (begin or end) %} —
+      {% if begin %}{{ begin }}{% else %}Inception{% endif %}
+      to {{ end if end else 'Current' }}
+    {% endif %}
+  </div>
+</div>
+
+<table>
+<thead><tr>
+  <th>Description</th>
+  {% for label in col_labels %}
+    {% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}
+    {% if ct == 'spacer' %}
+      <th class="spacer" style="width:8px"></th>
+    {% else %}
+      <th class="r" style="width:{{ '90px' if col_labels|length <= 3 else ('75px' if col_labels|length <= 5 else '65px') }}">{{ label }}</th>
+    {% endif %}
+  {% endfor %}
+</tr></thead>
+<tbody>
+{% for item, bals in rows %}
+  {% set itype = item.item_type %}
+  {% if itype in ('account', 'total') and item.acct_desc %}
+    {% set desc = item.acct_desc %}
+  {% else %}
+    {% set desc = item.description or item.acct_desc or item.acct_name or '' %}
+  {% endif %}
+  {% set indent = item.indent or 0 %}
+
+  {% if itype == 'label' %}
+    {% if desc %}
+    <tr class="lbl"><td class="indent-{{indent}}" colspan="{{col_labels|length + 1}}">{{desc}}</td></tr>
+    {% else %}
+    <tr class="lbl-empty"><td colspan="{{col_labels|length + 1}}">&nbsp;</td></tr>
+    {% endif %}
+
+  {% elif itype == 'separator' %}
+    {% if item.sep_style == 'single' %}
+    <tr class="sep-single"><td></td>
+      {% for label in col_labels %}
+        {% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}
+        {% if ct == 'spacer' %}<td class="spacer-cell"></td>{% else %}<td class="line"></td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% elif item.sep_style == 'double' %}
+    <tr class="sep-double"><td></td>
+      {% for label in col_labels %}
+        {% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}
+        {% if ct == 'spacer' %}<td class="spacer-cell"></td>{% else %}<td class="line"></td>{% endif %}
+      {% endfor %}
+    </tr>
+    {% else %}
+    <tr class="sep-blank"><td colspan="{{col_labels|length + 1}}">&nbsp;</td></tr>
+    {% endif %}
+
+  {% elif itype in ('account', 'total') %}
+    <tr class="{{'tot' if itype=='total' else ''}}">
+      <td class="indent-{{indent}}">{{desc}}</td>
+      {% if multicol %}
+        {# Multi-column: bals is a list #}
+        {% for b in bals %}
+          {% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}
+          {% if ct == 'spacer' %}
+            <td class="spacer-cell"></td>
+          {% elif ct == 'pct_change' %}
+            <td class="r">{% if b is none or b == 0 %}&mdash;{% else %}{{pct_fmt(b)}}{% endif %}</td>
+          {% else %}
+            <td class="r">{{fmt(b)}}</td>
+          {% endif %}
+        {% endfor %}
+      {% else %}
+        {# Single column: bals is a single int (backward compat) #}
+        <td class="r">{{fmt(bals)}}</td>
+      {% endif %}
+    </tr>
+  {% endif %}
+{% endfor %}
+</tbody>
+</table>
+
+<div class="foot">
+  <span>{{ company }} — {{ report.description or report.name }}</span>
+  <span>Printed {{ now }}</span>
+</div>
+</body></html>

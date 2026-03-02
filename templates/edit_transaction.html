@@ -1,0 +1,435 @@
+{% extends "base.html" %}
+{% block title %}Edit Transaction{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>
+  {% if from_report %}
+  <a href="/report/{{ from_report.id }}">{{ from_report.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  {% if from_account %}
+  <a href="/ledger/{{ from_account.id }}{% if from_report %}?from_report={{ from_report.id }}{% endif %}">{{ from_account.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  <span>Txn #{{ txn.id }}</span>
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Edit Transaction #{{ txn.id }}</h1>
+
+<form method="post">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
+  
+  <div class="form-row" style="margin-bottom: 16px;">
+    <div class="form-group">
+      <label>Date</label>
+      <input type="text" name="date" value="{{ txn.date }}" required placeholder="yyyy-mm-dd" style="font-family:var(--mono)">
+    </div>
+    <div class="form-group">
+      <label>Reference</label>
+      <input type="text" name="reference" value="{{ txn.reference }}">
+    </div>
+    <div class="form-group" style="grid-column: span 2;">
+      <label>Description</label>
+      <input type="text" name="description" value="{{ txn.description }}">
+    </div>
+  </div>
+  
+  <table>
+    <thead>
+      <tr>
+        <th style="width:200px">Account</th>
+        <th>Description</th>
+        <th class="num" style="width:140px">Amount (+Dr / -Cr)</th>
+        <th style="width:36px" title="Document on file">Doc</th>
+        <th style="width:40px"></th>
+      </tr>
+    </thead>
+    <tbody id="distLines">
+      {% for line in lines %}
+      <tr data-line-id="{{ line.id }}">
+        <td class="autocomplete-wrapper">
+          <input type="text" name="line_account[]" class="acct-autocomplete" 
+                 value="{{ line.account_name }}" autocomplete="off">
+        </td>
+        <td><input type="text" name="line_desc[]" value="{{ line.description }}"></td>
+        <td><input type="text" name="line_amount[]" class="amount-input" 
+                   value="{{ line.amount|money_plain }}" onchange="updateDistTotal()"></td>
+        <td style="text-align:center">
+          <input type="hidden" name="line_reconciled[]" value="{{ line.reconciled or 0 }}">
+          <input type="hidden" name="line_doc_on_file[]" value="{{ line.doc_on_file or 0 }}">
+          <button type="button" class="doc-btn" data-lid="{{ line.id }}" onclick="toggleDocFlag(this)" title="Document on file"
+            style="background:none;border:none;font-size:14px;cursor:pointer;padding:0 2px;color:{% if line.doc_on_file %}var(--accent){% else %}var(--faint){% endif %}">{% if line.doc_on_file %}📎{% else %}·{% endif %}</button>
+        </td>
+        <td><button type="button" class="btn btn-sm btn-danger" onclick="removeLine(this)">×</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr>
+        <td colspan="3">
+          <button type="button" class="btn btn-sm" onclick="addLine()">+ Add Line</button>
+          <button type="button" class="btn btn-sm" onclick="openCopyName()" style="margin-left:12px" title="Copy a filename for the PDF receipt">📋 Copy Filename</button>
+        </td>
+        <td class="num" id="distTotal" style="font-weight:bold">0.00</td>
+        <td></td>
+      </tr>
+    </tfoot>
+  </table>
+  <p id="distWarning" style="color:var(--negative); font-size:13px; margin-top:8px; display:none;">
+    ⚠ Lines must balance to zero (debits = credits).
+  </p>
+  
+  <div style="margin-top:16px; display:flex; gap:8px; align-items:center;">
+    <button type="submit" class="btn btn-primary">Save Changes</button>
+    <a href="{% if from_account %}/ledger/{{ from_account.id }}{% if from_report %}?from_report={{ from_report.id }}{% endif %}#txn-{{ txn.id }}{% else %}{{ return_to or url_for('home') }}{% endif %}" class="btn">Cancel</a>
+    <span style="font-size:10px;color:var(--muted)">
+      <kbd>F2</kbd> up to ledger &nbsp; <kbd>F5</kbd> jump to account &nbsp; <kbd>F7</kbd> copy filename
+    </span>
+    <span style="flex:1"></span>
+    <button type="button" class="btn btn-danger" onclick="doDelete()">Delete Transaction</button>
+  </div>
+</form>
+
+<!-- Copy Filename Modal -->
+<div id="copyNameModal" style="display:none;position:fixed;inset:0;z-index:300;background:rgba(0,0,0,.5);align-items:center;justify-content:center">
+<div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;box-shadow:0 8px 32px rgba(0,0,0,.3);width:min(520px,90vw);padding:16px 20px">
+  <div style="font-weight:700;font-size:14px;margin-bottom:12px">Copy Filename for PDF Receipt</div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:12px">
+    Date and amount are locked. Edit the description as needed — it's pre-selected so you can type over it immediately.
+  </div>
+  <div style="display:flex;gap:8px;align-items:end;margin-bottom:12px">
+    <div>
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Date</label>
+      <input type="text" id="cnDate" readonly style="font-family:var(--mono);font-size:12px;width:100px;padding:4px 6px;background:var(--surface-raised);color:var(--muted);border:1px solid var(--border)">
+    </div>
+    <div style="flex:1">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Description</label>
+      <input type="text" id="cnDesc" style="font-family:var(--mono);font-size:12px;width:100%;padding:4px 6px;border:1px solid var(--border);background:var(--surface);color:var(--text);box-sizing:border-box" oninput="updateCnPreview()">
+    </div>
+    <div>
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Amount</label>
+      <input type="text" id="cnAmt" readonly style="font-family:var(--mono);font-size:12px;width:90px;padding:4px 6px;background:var(--surface-raised);color:var(--muted);border:1px solid var(--border);text-align:right">
+    </div>
+  </div>
+  <div style="margin-bottom:12px">
+    <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Preview</label>
+    <div id="cnPreview" style="font-family:var(--mono);font-size:13px;padding:6px 8px;background:var(--surface-raised);border:1px solid var(--border);border-radius:3px;word-break:break-all"></div>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button class="btn btn-sm" onclick="closeCopyName()">Cancel</button>
+    <button class="btn btn-sm btn-primary" onclick="doCopyName()">Copy to Clipboard</button>
+  </div>
+</div>
+</div>
+
+<form id="deleteForm" method="post" action="{{ url_for('delete_transaction', txn_id=txn.id) }}" style="display:none">
+  <input type="hidden" name="return_to" value="{{ return_to }}">
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const RETURN_TO = {{ return_to|tojson }};
+  const TXN_ID = {{ txn.id }};
+  {% if from_report %}const FROM_REPORT = {{ from_report.id }};{% else %}const FROM_REPORT = null;{% endif %}
+  {% if from_account %}const FROM_ACCOUNT = {{ from_account.id }};{% else %}const FROM_ACCOUNT = null;{% endif %}
+  
+  function contractUp() {
+    // F2 = contract up to the parent ledger, with cursor on this transaction
+    if (FROM_ACCOUNT) {
+      let url = '/ledger/' + FROM_ACCOUNT;
+      if (FROM_REPORT) url += '?from_report=' + FROM_REPORT;
+      url += '#txn-' + TXN_ID;
+      window.location = url;
+    } else if (RETURN_TO) {
+      window.location = RETURN_TO;
+    } else {
+      window.location = '/';
+    }
+  }
+  
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'F2') {
+      e.preventDefault();
+      contractUp();
+    }
+    // F5 = jump to the account in the focused/active row
+    if (e.key === 'F5') {
+      e.preventDefault();
+      const focused = document.activeElement;
+      const row = focused ? focused.closest('#distLines tr') : null;
+      if (row) {
+        const acctInput = row.querySelector('.acct-autocomplete');
+        if (acctInput && acctInput.value.trim()) {
+          const acctName = acctInput.value.trim().toUpperCase();
+          // Navigate to that account's ledger with this txn highlighted
+          let url = '/ledger-by-name/' + encodeURIComponent(acctName) + '?focus_txn=' + TXN_ID;
+          if (FROM_REPORT) url += '&from_report=' + FROM_REPORT;
+          window.location = url;
+        }
+      }
+    }
+    // F7 = open Copy Filename modal
+    if (e.key === 'F7') {
+      e.preventDefault();
+      openCopyName();
+    }
+    // Escape closes the Copy Filename modal if open
+    if (e.key === 'Escape') {
+      const modal = document.getElementById('copyNameModal');
+      if (modal && modal.style.display !== 'none') {
+        e.preventDefault();
+        closeCopyName();
+      }
+    }
+  });
+  
+  function doDelete() {
+    if (confirm('Delete this transaction?\n\nThis cannot be undone.')) {
+      document.getElementById('deleteForm').submit();
+    }
+  }
+
+  // Account autocomplete for distribution lines
+  function setupAutocomplete(input) {
+    const wrapper = input.closest('.autocomplete-wrapper') || input.parentElement;
+    let dd = wrapper.querySelector('.ac-dropdown');
+    if (!dd) {
+      dd = document.createElement('div');
+      dd.className = 'ac-dropdown';
+      dd.style.cssText = 'display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:3px;max-height:180px;overflow-y:auto;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.2);';
+      wrapper.style.position = 'relative';
+      wrapper.appendChild(dd);
+    }
+    let ahi = -1;
+    input.addEventListener('input', async function() {
+      const q = this.value.trim();
+      if (q.length < 1) { dd.style.display = 'none'; return; }
+      const r = await fetch('/api/account-search?q=' + encodeURIComponent(q));
+      const accts = await r.json();
+      dd.innerHTML = accts.map((a,i) =>
+        `<div data-n="${a.name}" style="padding:3px 6px;cursor:pointer;font-size:11px;display:flex;justify-content:space-between;color:var(--text)" onmouseover="this.style.background='var(--sel)'" onmouseout="this.style.background=''"><b>${a.name}</b><span style="color:var(--muted)">${a.description||''}</span></div>`
+      ).join('');
+      ahi = -1;
+      dd.style.display = accts.length > 0 ? 'block' : 'none';
+    });
+    dd.addEventListener('click', function(e) {
+      const it = e.target.closest('[data-n]');
+      if (it) { input.value = it.dataset.n; dd.style.display = 'none'; }
+    });
+    input.addEventListener('keydown', function(e) {
+      const items = dd.querySelectorAll('[data-n]');
+      if (dd.style.display === 'block') {
+        if (e.key === 'ArrowDown') { e.preventDefault(); ahi = Math.min(ahi+1, items.length-1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); ahi = Math.max(ahi-1, 0); }
+        else if ((e.key === 'Enter' || e.key === 'Tab') && ahi >= 0) {
+          e.preventDefault(); input.value = items[ahi].dataset.n; dd.style.display = 'none'; return;
+        } else if (e.key === 'Tab' && items.length === 1) {
+          input.value = items[0].dataset.n; dd.style.display = 'none'; return;
+        }
+        items.forEach((it,i) => it.style.background = i===ahi ? 'var(--sel)' : '');
+      }
+    });
+    input.addEventListener('blur', () => setTimeout(() => dd.style.display = 'none', 150));
+  }
+
+  function addLine() {
+    const tbody = document.getElementById('distLines');
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="autocomplete-wrapper">
+        <input type="text" name="line_account[]" class="acct-autocomplete" placeholder="Account" autocomplete="off" style="text-transform:uppercase">
+      </td>
+      <td><input type="text" name="line_desc[]" placeholder="Description"></td>
+      <td><input type="text" name="line_amount[]" class="amount-input" placeholder="0.00" onchange="updateDistTotal()"></td>
+      <td style="text-align:center">
+        <input type="hidden" name="line_reconciled[]" value="0">
+        <input type="hidden" name="line_doc_on_file[]" value="0">
+        <button type="button" class="doc-btn" onclick="toggleDocFlag(this)" title="Document on file"
+          style="background:none;border:none;font-size:14px;cursor:pointer;padding:0 2px;color:var(--faint)">·</button>
+      </td>
+      <td><button type="button" class="btn btn-sm btn-danger" onclick="removeLine(this)">×</button></td>
+    `;
+    tbody.appendChild(row);
+    row.querySelectorAll('.acct-autocomplete').forEach(setupAutocomplete);
+    row.querySelector('input').focus();
+  }
+
+  async function toggleDocFlag(btn) {
+    const lid = btn.dataset.lid;
+    if (lid) {
+      // Existing line — AJAX toggle updates ALL lines in this transaction
+      const r = await fetch('/api/doc-toggle/' + lid, {method:'POST'});
+      const d = await r.json();
+      if (d.ok) {
+        // Update ALL doc buttons and hidden fields in the distribution view
+        document.querySelectorAll('#distLines tr').forEach(row => {
+          const h = row.querySelector('input[name="line_doc_on_file[]"]');
+          const b = row.querySelector('.doc-btn');
+          if (h) h.value = d.doc_on_file ? '1' : '0';
+          if (b) {
+            b.textContent = d.doc_on_file ? '📎' : '·';
+            b.style.color = d.doc_on_file ? 'var(--accent)' : 'var(--faint)';
+          }
+        });
+      }
+    } else {
+      // New unsaved transaction — toggle all hidden fields locally
+      const tbody = document.getElementById('distLines');
+      const isOn = btn.closest('tr').querySelector('input[name="line_doc_on_file[]"]').value === '1';
+      const newVal = isOn ? '0' : '1';
+      tbody.querySelectorAll('tr').forEach(row => {
+        const h = row.querySelector('input[name="line_doc_on_file[]"]');
+        const b = row.querySelector('.doc-btn');
+        if (h) h.value = newVal;
+        if (b) {
+          b.textContent = newVal === '1' ? '📎' : '·';
+          b.style.color = newVal === '1' ? 'var(--accent)' : 'var(--faint)';
+        }
+      });
+    }
+  }
+
+  // ── Copy Filename Modal ──
+  function sanitizeFilename(s) {
+    return s.replace(/[\/\\:*?"<>|]/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '');
+  }
+  function getTxnAmount() {
+    // Get the absolute amount from the first line (the primary debit/credit)
+    const amounts = document.querySelectorAll('#distLines input[name="line_amount[]"]');
+    let maxAbs = 0;
+    amounts.forEach(inp => {
+      const v = Math.abs(parseAmountForTotal(inp.value));
+      if (v > maxAbs) maxAbs = v;
+    });
+    return maxAbs.toFixed(2);
+  }
+  function openCopyName() {
+    const dateVal = document.querySelector('input[name="date"]').value;
+    const descVal = document.querySelector('input[name="description"]').value || '';
+    const amtVal = getTxnAmount();
+    document.getElementById('cnDate').value = dateVal;
+    document.getElementById('cnDesc').value = descVal;
+    document.getElementById('cnAmt').value = amtVal;
+    updateCnPreview();
+    document.getElementById('copyNameModal').style.display = 'flex';
+    // Select the description text so user can type over immediately
+    setTimeout(() => {
+      const d = document.getElementById('cnDesc');
+      d.focus();
+      d.select();
+    }, 50);
+  }
+  function closeCopyName() {
+    document.getElementById('copyNameModal').style.display = 'none';
+  }
+  function updateCnPreview() {
+    const dt = document.getElementById('cnDate').value;
+    const desc = sanitizeFilename(document.getElementById('cnDesc').value);
+    const amt = document.getElementById('cnAmt').value;
+    const name = dt + (desc ? '_' + desc : '') + '_' + amt + '.pdf';
+    document.getElementById('cnPreview').textContent = name;
+  }
+  function doCopyName() {
+    const text = document.getElementById('cnPreview').textContent;
+    // Use textarea fallback for clipboard (works on all browsers/contexts)
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;left:-9999px';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    // Close modal immediately
+    closeCopyName();
+    // Show toast
+    let toast = document.getElementById('copyToast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'copyToast';
+      toast.style.cssText = 'position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#22c55e;color:#fff;padding:8px 20px;border-radius:4px;font-size:13px;font-weight:600;z-index:999;box-shadow:0 4px 12px rgba(0,0,0,.25);transition:opacity .3s';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = '✓ Copied: ' + text;
+    toast.style.opacity = '1';
+    toast.style.display = 'block';
+    setTimeout(() => { toast.style.opacity = '0'; setTimeout(() => { toast.style.display = 'none'; }, 300); }, 2000);
+  }
+  
+  function removeLine(btn) {
+    const tbody = document.getElementById('distLines');
+    if (tbody.children.length > 1) {
+      btn.closest('tr').remove();
+      updateDistTotal();
+    }
+  }
+  
+  function parseAmountForTotal(s) {
+    s = s.trim().replace(/,/g, '').replace('$', '');
+    if (!s) return 0;
+    let neg = false;
+    if (s.startsWith('(') && s.endsWith(')')) { neg = true; s = s.slice(1, -1); }
+    if (s.startsWith('-')) { neg = true; s = s.slice(1); }
+    if (s.endsWith('-')) { neg = true; s = s.slice(0, -1); }
+    let val = parseFloat(s) || 0;
+    return neg ? -val : val;
+  }
+  
+  function updateDistTotal() {
+    const amounts = document.querySelectorAll('#distLines input[name="line_amount[]"]');
+    let total = 0;
+    amounts.forEach(input => { total += parseAmountForTotal(input.value); });
+    const el = document.getElementById('distTotal');
+    const warn = document.getElementById('distWarning');
+    el.textContent = total.toFixed(2);
+    el.style.color = Math.abs(total) < 0.005 ? 'var(--text)' : 'var(--accent)';
+    warn.style.display = Math.abs(total) < 0.005 ? 'none' : '';
+  }
+
+  // ── Arrow key navigation within distribution table ──
+  document.getElementById('distLines').addEventListener('keydown', function(e) {
+    const input = e.target;
+    if (input.tagName !== 'INPUT') return;
+    // Don't intercept if autocomplete dropdown is open
+    const dd = input.closest('.autocomplete-wrapper');
+    if (dd) {
+      const dropdown = dd.querySelector('.ac-dropdown');
+      if (dropdown && dropdown.style.display === 'block') return;
+    }
+    const td = input.closest('td');
+    const tr = td.closest('tr');
+    const tbody = document.getElementById('distLines');
+    const rows = [...tbody.querySelectorAll('tr')];
+    const rowIdx = rows.indexOf(tr);
+    const cellsInRow = [...tr.querySelectorAll('input[type="text"]')];
+    const colIdx = cellsInRow.indexOf(input);
+
+    if (e.key === 'ArrowUp' && rowIdx > 0) {
+      e.preventDefault();
+      const targetRow = rows[rowIdx - 1];
+      const targetCells = [...targetRow.querySelectorAll('input[type="text"]')];
+      const target = targetCells[Math.min(colIdx, targetCells.length - 1)];
+      if (target) { target.focus(); target.select(); }
+    } else if (e.key === 'ArrowDown' && rowIdx < rows.length - 1) {
+      e.preventDefault();
+      const targetRow = rows[rowIdx + 1];
+      const targetCells = [...targetRow.querySelectorAll('input[type="text"]')];
+      const target = targetCells[Math.min(colIdx, targetCells.length - 1)];
+      if (target) { target.focus(); target.select(); }
+    } else if (e.key === 'ArrowLeft' && input.selectionStart === 0 && input.selectionEnd === 0 && colIdx > 0) {
+      e.preventDefault();
+      const target = cellsInRow[colIdx - 1];
+      if (target) { target.focus(); target.setSelectionRange(target.value.length, target.value.length); }
+    } else if (e.key === 'ArrowRight' && input.selectionStart === input.value.length && colIdx < cellsInRow.length - 1) {
+      e.preventDefault();
+      const target = cellsInRow[colIdx + 1];
+      if (target) { target.focus(); target.setSelectionRange(0, 0); }
+    }
+  });
+
+  // Wire up autocomplete on all existing inputs
+  document.querySelectorAll('.acct-autocomplete').forEach(setupAutocomplete);
+  updateDistTotal();
+</script>
+{% endblock %}

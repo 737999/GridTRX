@@ -1,0 +1,146 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">Home</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .sys { background:var(--surface); border:1px solid var(--border); overflow:hidden; }
+  .sys-row { display:flex; align-items:center; padding:0; border-bottom:1px solid var(--border-light);
+    text-decoration:none; color:var(--text); cursor:pointer; }
+  .sys-row:last-child { border-bottom:none; }
+  .sys-row:hover { background:var(--surface-raised); }
+  .sys-row.sel { background:var(--sel); }
+  .sys-code { font-family:var(--mono); font-weight:700; font-size:11px; width:80px;
+    padding:5px 10px; color:var(--accent); flex-shrink:0; }
+  .sys-desc { font-size:11px; padding:5px 0; flex:1; }
+  .sys-arr { color:var(--faint); padding:5px 10px; font-size:10px; }
+  .sys-move { display:flex; flex-direction:column; padding:0 4px; gap:0; }
+  .sys-move button { background:none; border:none; cursor:pointer; color:var(--faint);
+    font-size:9px; padding:0; line-height:1; }
+  .sys-move button:hover { color:var(--text); }
+  .home-bar { display:flex; align-items:center; justify-content:space-between; margin-bottom:4px; }
+  .home-tools { display:flex; gap:3px; flex-wrap:wrap; }
+</style>
+
+<div class="home-bar">
+  <h1>{{ company }}</h1>
+  <div class="home-tools">
+    <a href="{{ url_for('new_report') }}" class="btn btn-sm">+ Report</a>
+    <a href="{{ url_for('new_account') }}" class="btn btn-sm">+ Account</a>
+    <a href="{{ url_for('new_transaction') }}" class="btn btn-sm">+ Transaction</a>
+    <a href="{{ url_for('csv_import') }}" class="btn btn-sm">Import</a>
+    <a href="{{ url_for('trial_balance') }}" class="btn btn-sm">Trial Bal</a>
+    <button class="btn btn-sm" onclick="setupDetailedAR()" title="Setup Detailed AR subledger report">Setup AR</button>
+    <button class="btn btn-sm" onclick="setupDetailedAP()" title="Setup Detailed AP subledger report">Setup AP</button>
+  </div>
+</div>
+
+<div class="sys" id="sysList">
+  {% for report in reports %}
+  <div class="sys-row" data-idx="{{ loop.index0 }}" data-rid="{{ report.id }}" data-sort="{{ report.sort_order }}">
+    <div class="sys-move">
+      <button onclick="event.stopPropagation();moveReport({{report.id}},{{report.sort_order}},-1)" title="Move up">▲</button>
+      <button onclick="event.stopPropagation();moveReport({{report.id}},{{report.sort_order}},1)" title="Move down">▼</button>
+    </div>
+    <a href="{{ url_for('report_view', report_id=report.id) }}" style="color:inherit;text-decoration:none">
+      <span class="sys-code">{{ report.name }}</span>
+    </a>
+    <span class="sys-desc" ondblclick="renameReport({{report.id}},this)" onclick="event.stopPropagation()" style="cursor:text">{{ report.description }}</span>
+    <a href="{{ url_for('report_view', report_id=report.id) }}" style="color:inherit;text-decoration:none;margin-left:auto">
+      <span class="sys-arr">▸</span>
+    </a>
+  </div>
+  {% endfor %}
+  {% if not reports %}
+  <div style="padding:16px;text-align:center;color:var(--muted);font-size:11px">
+    No reports. <a href="{{ url_for('new_report') }}">Create one</a>.
+  </div>
+  {% endif %}
+</div>
+
+<div style="margin-top:8px;font-size:10px;color:var(--faint)">
+  <kbd>↑↓</kbd> navigate &nbsp; <kbd>Enter</kbd> open &nbsp; <kbd>Dbl-click</kbd> description to rename
+</div>
+
+<script>
+const rows = [...document.querySelectorAll('.sys-row[data-idx]')];
+let sel = 0;
+function pick(i) {
+  if (i < 0 || i >= rows.length) return;
+  rows.forEach(r => r.classList.remove('sel'));
+  sel = i;
+  rows[sel].classList.add('sel');
+  rows[sel].scrollIntoView({block:'nearest'});
+}
+if (rows.length) pick(0);
+
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowDown') { e.preventDefault(); pick(sel + 1); }
+  else if (e.key === 'ArrowUp') { e.preventDefault(); pick(sel - 1); }
+  else if (e.key === 'Enter' || e.key === 'F3') {
+    e.preventDefault();
+    const a = rows[sel]?.querySelector('a');
+    if (a) a.click();
+  }
+});
+
+rows.forEach((r, i) => r.addEventListener('click', () => pick(i)));
+
+function setupDetailedAR() {
+  if (!confirm('This will create an AR subledger report with 3 sample client accounts (Gretzky, Lemieux, Orr) and link it to the Balance Sheet.\n\nContinue?')) return;
+  fetch('/api/setup-detailed-ar', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) { alert(d.message); location.reload(); }
+      else alert('Error: ' + d.error);
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
+function setupDetailedAP() {
+  if (!confirm('This will create an AP subledger report with 3 sample vendor accounts (Bauer, CCM, Warrior) and link it to the Balance Sheet.\n\nContinue?')) return;
+  fetch('/api/setup-detailed-ap', {method:'POST'})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) { alert(d.message); location.reload(); }
+      else alert('Error: ' + d.error);
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
+function renameReport(rid, el) {
+  const cur = el.textContent.trim();
+  const val = prompt('Report description:', cur);
+  if (val === null || val.trim() === '' || val.trim() === cur) return;
+  fetch('/api/report/' + rid + '/description', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body:JSON.stringify({description: val.trim()})})
+    .then(r => r.json())
+    .then(d => {
+      if (d.ok) { el.textContent = val.trim(); }
+      else alert('Error: ' + d.error);
+    })
+    .catch(e => alert('Error: ' + e));
+}
+
+function moveReport(rid, curSort, dir) {
+  // Swap with adjacent report
+  const idx = rows.findIndex(r => r.dataset.rid == rid);
+  const swapIdx = idx + dir;
+  if (swapIdx < 0 || swapIdx >= rows.length) return;
+  const swapRid = rows[swapIdx].dataset.rid;
+  const swapSort = parseInt(rows[swapIdx].dataset.sort);
+
+  // Swap sort orders via API
+  Promise.all([
+    fetch('/api/report/' + rid + '/sort', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({sort_order: swapSort})}),
+    fetch('/api/report/' + swapRid + '/sort', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({sort_order: curSort})})
+  ]).then(() => location.reload());
+}
+</script>
+{% endblock %}

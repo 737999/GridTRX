@@ -1,0 +1,673 @@
+{% extends "base.html" %}
+{% block title %}{{ report.name }}{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>{{ report.description or report.name }}
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .pcfg { background:var(--surface); border:1px solid var(--border); border-radius:4px;
+    padding:8px 12px; margin-bottom:6px; font-size:11px; }
+  .pcfg summary { cursor:pointer; font-weight:600; color:var(--muted); font-size:11px; }
+  .pcfg-grid { display:grid; grid-template-columns:80px repeat(6, 1fr); gap:0; margin-top:8px; }
+  .pcfg-grid .lbl { padding:3px 6px; color:var(--muted); font-weight:500; font-size:10.5px; display:flex; align-items:center; }
+  .pcfg-grid .hdr { text-align:center; font-weight:600; color:var(--accent); padding:3px 4px; border-bottom:1px solid var(--border-light); font-size:10px; }
+  .pcfg-grid .cell { padding:1px 3px; }
+  .pcfg-grid input[type="text"], .pcfg-grid select { width:100%; padding:2px 4px; font-size:11px;
+    border:1px solid var(--border); border-radius:2px; font-family:var(--mono); background:var(--surface); color:var(--text); }
+  .pcfg-grid input:focus, .pcfg-grid select:focus { border-color:var(--accent); outline:none; }
+  .pcfg-actions { margin-top:6px; display:flex; gap:4px; }
+
+  /* ── Report frame: header, scroll body, footer ── */
+  .rpt-frame { display:flex; flex-direction:column; height:calc(100vh - 90px); }
+  .rpt-bar { display:flex; align-items:center; justify-content:space-between; padding:4px 0 2px; flex-shrink:0; }
+  .rpt-bar h1 { font-size:14px; margin:0; }
+  .rpt-tools { display:flex; gap:2px; }
+  .rpt-tools a, .rpt-tools button { color:var(--muted); text-decoration:none; cursor:pointer;
+    background:none; border:none; font-size:11px; font-family:var(--sans); padding:3px 6px;
+    border-radius:2px; }
+  .rpt-tools a:hover, .rpt-tools button:hover { color:var(--text); background:var(--surface-raised); }
+
+  /* Column header - pinned at top of scroll area */
+  .rpt-hdr { flex-shrink:0; border-bottom:2px solid #999; background:var(--surface); }
+  .rpt-hdr table { width:100%; border-collapse:collapse; }
+  .rpt-hdr th { padding:3px 6px; text-align:left; font-size:10px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.3px; color:var(--muted); }
+  .rpt-hdr th.r { text-align:center; }
+
+  /* Scrollable body */
+  .rpt-body { flex:1; overflow-y:auto; overflow-x:auto; }
+  .rpt-body table { width:100%; border-collapse:collapse; }
+
+  /* Footer - pinned at bottom */
+  .rpt-ftr { flex-shrink:0; border-top:1px solid var(--border); background:var(--surface); }
+  .rpt-ftr table { width:100%; border-collapse:collapse; }
+  .rpt-ftr th { padding:3px 6px; text-align:left; font-size:10px; font-weight:700;
+    text-transform:uppercase; letter-spacing:.3px; color:var(--muted); }
+  .rpt-ftr th.r { text-align:center; }
+
+  /* Shared table cell styles */
+  .rpt { table-layout:fixed; border-collapse:separate; border-spacing:0; }
+  .rpt td { padding:1px 6px; font-size:11px; overflow:hidden; text-overflow:ellipsis; line-height:16px; }
+  .rpt td.r { text-align:right; font-family:var(--mono); font-size:11px; }
+  .rpt .lbl td { font-weight:700; padding-top:6px; padding-bottom:1px; }
+  .rpt .lbl-empty td { line-height:16px; }
+  /* When a blank label becomes a separator line, collapse it */
+  .rpt .lbl-empty.sep-single td, .rpt .lbl-empty.sep-double td { line-height:6px; font-size:0; padding-top:0; padding-bottom:0; }
+  /* Separator rows — collapse to thin underline height */
+  .rpt .sep-single td, .rpt .sep-double td { padding-top:0; padding-bottom:0; line-height:6px; font-size:0; }
+  .rpt .sep-single td.line { border-bottom:1px solid var(--text); }
+  .rpt .sep-double td.line { border-bottom:3px double var(--text); }
+  /* But keep setup cells readable when in setup mode */
+  .rpt .sep-single td.setup, .rpt .sep-double td.setup { font-size:10px; line-height:14px; padding:1px 2px; }
+  /* Gap between column underlines — each column's line is independent */
+  .rpt td.line { margin:0 3px; border-left:3px solid transparent; border-right:3px solid transparent; }
+  .rpt .spacer-cell { border:none !important; background:transparent !important; }
+  .rpt .sep-blank td { }
+  .rpt .acct:hover td { background:var(--surface-raised); }
+  .rpt .tot td { font-weight:700; }
+  .rpt .row-sel td { background:var(--sel) !important; }
+  .indent-0 { padding-left:6px !important; }
+  .indent-1 { padding-left:18px !important; }
+  .indent-2 { padding-left:30px !important; }
+  .indent-3 { padding-left:42px !important; }
+
+  .setup { color:var(--muted); font-size:10px; font-family:var(--mono); cursor:text; text-align:left; padding-left:2px !important; padding-right:2px !important; }
+  th.setup { color:var(--faint); font-size:10px; cursor:default; font-weight:600; text-align:left; padding-left:2px !important; padding-right:2px !important; }
+  td.setup:hover { background:var(--accent-bg) !important; }
+  td.setup input { width:100%; padding:0 2px; font-family:var(--mono); font-size:10px;
+    border:1px solid var(--accent); border-radius:1px; background:#fff; outline:none; }
+
+  .ctx-menu { display:none; position:fixed; background:var(--surface); border:1px solid var(--border);
+    border-radius:3px; box-shadow:0 2px 8px rgba(0,0,0,.12); z-index:200; min-width:170px;
+    padding:2px 0; font-size:11px; }
+  .ctx-menu.show { display:block; }
+  .ctx-menu div { padding:3px 10px; cursor:pointer; display:flex; justify-content:space-between; }
+  .ctx-menu div:hover { background:var(--accent-bg); }
+  .ctx-menu div kbd { color:var(--faint); font-size:9px; }
+  .ctx-menu .sep { height:1px; background:var(--border-light); margin:1px 0; padding:0; cursor:default; }
+  .ctx-menu .danger { color:var(--neg); }
+
+  .overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.15); z-index:99; }
+  .overlay.show { display:block; }
+  .dlg { display:none; position:fixed; top:50%; left:50%; transform:translate(-50%,-50%);
+    background:var(--surface); border:1px solid var(--border); border-radius:4px;
+    padding:12px 16px; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.12); min-width:380px; }
+  .dlg.show { display:block; }
+  .dlg h3 { margin:0 0 10px; font-size:14px; }
+  .dlg .fg { margin-bottom:8px; }
+  .dlg label { display:block; font-size:10px; color:var(--muted); font-weight:600; text-transform:uppercase; margin-bottom:2px; }
+  .dlg input, .dlg select { width:100%; padding:4px 6px; font-size:12px; border:1px solid var(--border); border-radius:2px; }
+  .dlg input:focus, .dlg select:focus { outline:none; border-color:var(--accent); }
+
+  .kb-hint { font-size:10px; color:var(--faint); padding:3px 6px; flex-shrink:0; }
+</style>
+
+<!-- Period Config -->
+<details class="pcfg"><summary>Column Setup — {{ col_labels|length }} col: {{ col_labels|join(', ') }}</summary>
+<form method="get" id="periodForm">
+{% if hide_zero %}<input type="hidden" name="hide_zero" value="1">{% endif %}
+{% if show_setup %}<input type="hidden" name="show_setup" value="1">{% endif %}
+<div class="pcfg-grid">
+  <div class="lbl"></div>{% for i in range(1,7) %}<div class="hdr">({{ i }})</div>{% endfor %}
+  <div class="lbl">Begin</div>{% for i in range(1,7) %}{% set col=all_columns[i-1] if all_columns|length >= i else None %}<div class="cell"><input type="text" name="c{{i}}_begin" placeholder="yyyy-mm-dd" value="{{col.begin if col and col.type=='actual' else ''}}"></div>{% endfor %}
+  <div class="lbl">End</div>{% for i in range(1,7) %}{% set col=all_columns[i-1] if all_columns|length >= i else None %}<div class="cell"><input type="text" name="c{{i}}_end" placeholder="yyyy-mm-dd" value="{{col.end if col and col.type=='actual' else ''}}"></div>{% endfor %}
+  <div class="lbl">Type</div>{% for i in range(1,7) %}{% set col=all_columns[i-1] if all_columns|length >= i else None %}<div class="cell"><select name="c{{i}}_type"><option value="A" {%if col and col.type=='actual'%}selected{%endif%}>Actual</option><option value="change" {%if col and col.type=='change'%}selected{%endif%}>$ chg</option><option value="pct_change" {%if col and col.type=='pct_change'%}selected{%endif%}>% chg</option><option value="spacer" {%if col and col.type=='spacer'%}selected{%endif%}>Spacer</option><option value="" {%if not col%}selected{%endif%}>Off</option></select></div>{% endfor %}
+  <div class="lbl">Label</div>{% for i in range(1,7) %}{% set col=all_columns[i-1] if all_columns|length >= i else None %}<div class="cell"><input type="text" name="c{{i}}_label" placeholder="auto" value="{{col.label if col else ''}}"></div>{% endfor %}
+  <div class="lbl">chg A/B</div>{% for i in range(1,7) %}{% set col=all_columns[i-1] if all_columns|length >= i else None %}<div class="cell" style="display:flex;gap:2px"><input type="number" name="c{{i}}_a" value="{{(col.a+1) if col and col.type in ('change','pct_change') else ''}}" min="1" max="6" style="width:40%"><input type="number" name="c{{i}}_b" value="{{(col.b+1) if col and col.type in ('change','pct_change') else ''}}" min="1" max="6" style="width:40%"></div>{% endfor %}
+</div>
+<div class="pcfg-actions"><button type="submit" class="btn btn-sm btn-primary">Apply</button><a href="?reset=1" class="btn btn-sm">Reset</a></div>
+</form></details>
+
+{% set ncols = col_labels|length %}
+{% set scols = 8 if show_setup else 0 %}
+{% macro col_group() %}
+<colgroup>
+  <col style="width:auto; min-width:200px">
+  {% for label in col_labels %}<col style="width:110px">{% endfor %}
+  {% if show_setup %}
+  <col style="width:80px">
+  <col style="width:25px">
+  <col style="width:25px">
+  <col style="width:70px">
+  <col style="width:70px">
+  <col style="width:70px">
+  <col style="width:70px">
+  <col style="width:70px">
+  {% endif %}
+</colgroup>
+{% endmacro %}
+
+{% macro col_headers() %}
+  <th>Description</th>
+  {% for label in col_labels %}<th class="r">{{ label }}</th>{% endfor %}
+  {% if show_setup %}
+  <th class="setup">Name</th>
+  <th class="setup">B</th>
+  <th class="setup">Sep</th>
+  <th class="setup">TT-1</th>
+  <th class="setup">TT-2</th>
+  <th class="setup">TT-3</th>
+  <th class="setup">TT-4</th>
+  <th class="setup">TT-5</th>
+  {% endif %}
+{% endmacro %}
+
+<!-- Report Frame -->
+<div class="rpt-frame">
+  <!-- Title bar -->
+  <div class="rpt-bar">
+    <h1>{{ report.description or report.name }}</h1>
+    <div class="rpt-tools">
+      {% if hide_zero %}<a href="?{% if show_setup %}show_setup=1{% endif %}">Show zeros</a>{% else %}<a href="?hide_zero=1{% if show_setup %}&show_setup=1{% endif %}">Hide zeros</a>{% endif %}
+      {% if show_setup %}<a href="?{% if hide_zero %}hide_zero=1{% endif %}">Hide setup</a>{% else %}<a href="?show_setup=1{% if hide_zero %}&hide_zero=1{% endif %}">Show setup</a>{% endif %}
+      <a href="#" onclick="event.preventDefault();document.getElementById('printDlg').classList.add('show');document.getElementById('printOverlay').classList.add('show')">Print</a>
+      <a href="/report/{{report.id}}/multicol">Multi-Col</a>
+      <a href="/report/{{report.id}}/csv">CSV</a>
+    </div>
+  </div>
+
+  <!-- Pinned header -->
+  <div class="rpt-hdr"><table class="rpt">{{ col_group() }}<thead><tr>{{ col_headers() }}</tr></thead></table></div>
+
+  <!-- Scrollable body -->
+  <div class="rpt-body" id="rptScroll">
+  <table class="rpt" id="rptTable">
+  {{ col_group() }}
+  <tbody id="rptBody">
+  {% for item, bals in rows %}
+    {% set itype = item.item_type %}
+    {% set name = item.acct_name or '' %}
+    {% if itype in ('account', 'total') and item.acct_desc %}
+      {% set desc = item.acct_desc %}
+    {% else %}
+      {% set desc = item.description or item.acct_desc or name %}
+    {% endif %}
+    {% set indent = item.indent or 0 %}
+    {% set allzero = bals|reject('none')|sum == 0 %}
+
+    {% macro render_cells(bals) %}
+      {% for b in bals %}
+        {% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}
+        {% if ct == 'spacer' %}
+          <td class="r spacer-cell"></td>
+        {% elif ct == 'pct_change' %}
+          <td class="r line {%if b and b>0%}pos{%elif b and b<0%}neg{%else%}zero{%endif%}">{{pct_fmt(b)}}</td>
+        {% else %}
+          <td class="r line {%if b>0%}pos{%elif b<0%}neg{%else%}zero{%endif%}">{{fmt(b)}}</td>
+        {% endif %}
+      {% endfor %}
+    {% endmacro %}
+
+    {% if itype == 'label' %}
+      {% if desc %}
+      <tr class="lbl" data-type="label" data-iid="{{item.id}}" data-pos="{{item.position}}">
+        <td class="indent-{{indent}}">{{desc}}</td>
+        {% for b in bals %}<td></td>{% endfor %}
+        {% if show_setup %}
+        <td class="setup"></td>
+        <td class="setup"></td>
+        <td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">{% if item.sep_style == 'single' %}S{% elif item.sep_style == 'double' %}D{% endif %}</td>
+        <td class="setup"></td><td class="setup"></td><td class="setup"></td><td class="setup"></td><td class="setup"></td>
+        {% endif %}
+      </tr>
+      {% else %}
+      <tr class="lbl-empty{% if item.sep_style == 'single' %} sep-single{% elif item.sep_style == 'double' %} sep-double{% endif %}" data-type="label" data-iid="{{item.id}}" data-pos="{{item.position}}">
+        <td>&nbsp;</td>
+        {% for b in bals %}<td class="line"></td>{% endfor %}
+        {% if show_setup %}
+        <td class="setup"></td>
+        <td class="setup"></td>
+        <td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">{% if item.sep_style == 'single' %}S{% elif item.sep_style == 'double' %}D{% endif %}</td>
+        <td class="setup"></td><td class="setup"></td><td class="setup"></td><td class="setup"></td><td class="setup"></td>
+        {% endif %}
+      </tr>
+      {% endif %}
+    {% elif itype == 'separator' %}
+      {% if item.sep_style == 'single' %}
+      <tr class="sep-single" data-type="sep" data-iid="{{item.id}}" data-pos="{{item.position}}" data-sep="single">
+        <td></td>{% for b in bals %}{% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}<td class="{% if ct == 'spacer' %}spacer-cell{% else %}line{% endif %}"></td>{% endfor %}
+        {% if show_setup %}<td class="setup"></td><td class="setup"></td><td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">S</td>{% for _ in range(scols - 3) %}<td class="setup"></td>{% endfor %}{% endif %}
+      </tr>
+      {% elif item.sep_style == 'double' %}
+      <tr class="sep-double" data-type="sep" data-iid="{{item.id}}" data-pos="{{item.position}}" data-sep="double">
+        <td></td>{% for b in bals %}{% set ct = col_types[loop.index0] if col_types|length > loop.index0 else 'actual' %}<td class="{% if ct == 'spacer' %}spacer-cell{% else %}line{% endif %}"></td>{% endfor %}
+        {% if show_setup %}<td class="setup"></td><td class="setup"></td><td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">D</td>{% for _ in range(scols - 3) %}<td class="setup"></td>{% endfor %}{% endif %}
+      </tr>
+      {% else %}
+      <tr class="sep-blank" data-type="sep" data-iid="{{item.id}}" data-pos="{{item.position}}" data-sep="blank">
+        <td>&nbsp;</td>{% for b in bals %}<td></td>{% endfor %}
+        {% if show_setup %}<td class="setup"></td><td class="setup"></td><td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center"></td>{% for _ in range(scols - 3) %}<td class="setup"></td>{% endfor %}{% endif %}
+      </tr>
+      {% endif %}
+    {% elif itype == 'account' %}
+      {% if not hide_zero or not allzero %}
+      <tr id="acct-{{name}}" class="acct{% if item.sep_style == 'single' %} sep-single{% elif item.sep_style == 'double' %} sep-double{% endif %}" data-type="acct" data-id="{{item.account_id}}" data-iid="{{item.id}}" data-pos="{{item.position}}">
+        <td class="desc indent-{{indent}}"><a href="/ledger/{{item.account_id}}?from_report={{report.id}}" style="color:inherit;text-decoration:none">{{desc}}</a></td>
+        {{ render_cells(bals) }}
+        {% if show_setup %}
+        <td class="setup" data-f="name">{{name}}</td>
+        <td class="setup">{{item.normal_balance or ''}}</td>
+        <td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">{% if item.sep_style == 'single' %}S{% elif item.sep_style == 'double' %}D{% endif %}</td>
+        <td class="setup" data-f="total_to_1" data-iid="{{item.id}}">{{item.total_to_1 or ''}}</td>
+        <td class="setup" data-f="total_to_2" data-iid="{{item.id}}">{{item.total_to_2 or ''}}</td>
+        <td class="setup" data-f="total_to_3" data-iid="{{item.id}}">{{item.total_to_3 or ''}}</td>
+        <td class="setup" data-f="total_to_4" data-iid="{{item.id}}">{{item.total_to_4 or ''}}</td>
+        <td class="setup" data-f="total_to_5" data-iid="{{item.id}}">{{item.total_to_5 or ''}}</td>
+        {% endif %}
+      </tr>
+      {% endif %}
+    {% elif itype == 'total' %}
+      <tr class="tot{% if item.sep_style == 'single' %} sep-single{% elif item.sep_style == 'double' %} sep-double{% endif %}" data-type="total" data-id="{{item.account_id}}" data-iid="{{item.id}}" data-pos="{{item.position}}">
+        <td class="indent-{{indent}}">{% if item.account_id %}<a href="/ledger/{{item.account_id}}?from_report={{report.id}}" style="color:inherit;text-decoration:none">{{desc}}</a>{% else %}{{desc}}{% endif %}</td>
+        {{ render_cells(bals) }}
+        {% if show_setup %}
+        <td class="setup" data-f="name">{{name}}</td>
+        <td class="setup">{{item.normal_balance or ''}}</td>
+        <td class="setup" data-f="sep_style" data-iid="{{item.id}}" style="cursor:pointer;text-align:center;font-weight:bold">{% if item.sep_style == 'single' %}S{% elif item.sep_style == 'double' %}D{% endif %}</td>
+        <td class="setup" data-f="total_to_1" data-iid="{{item.id}}">{{item.total_to_1 or ''}}</td>
+        <td class="setup" data-f="total_to_2" data-iid="{{item.id}}">{{item.total_to_2 or ''}}</td>
+        <td class="setup" data-f="total_to_3" data-iid="{{item.id}}">{{item.total_to_3 or ''}}</td>
+        <td class="setup" data-f="total_to_4" data-iid="{{item.id}}">{{item.total_to_4 or ''}}</td>
+        <td class="setup" data-f="total_to_5" data-iid="{{item.id}}">{{item.total_to_5 or ''}}</td>
+        {% endif %}
+      </tr>
+    {% endif %}
+  {% endfor %}
+  </tbody>
+  </table>
+  </div>
+
+  <!-- Pinned footer -->
+  <div class="rpt-ftr">
+    <table class="rpt">{{ col_group() }}<thead><tr>{{ col_headers() }}</tr></thead></table>
+    <div style="padding:4px 6px;display:flex;gap:4px;align-items:center">
+      <button class="btn btn-sm" onclick="openDlg('account', lastPos())" title="Add Account">+ Account</button>
+      <button class="btn btn-sm" onclick="openDlg('total', lastPos())" title="Add Total">+ Total</button>
+      <button class="btn btn-sm" onclick="openDlg('label', lastPos())" title="Add Label">+ Label</button>
+      <button class="btn btn-sm" onclick="quickAdd(lastPos(),'label','')" title="Add blank line after selected row">+ Line</button>
+      <span style="flex:1"></span>
+      <span class="kb-hint"><kbd>↑↓</kbd> nav <kbd>←→</kbd> indent <kbd>Ctrl+↑↓</kbd> move <kbd>Enter</kbd> open <kbd>\</kbd> menu <kbd>F2</kbd> back</span>
+    </div>
+  </div>
+</div>
+
+<!-- Print Dialog -->
+<div class="overlay" id="printOverlay" onclick="document.getElementById('printDlg').classList.remove('show');this.classList.remove('show')"></div>
+<div class="dlg" id="printDlg">
+  <h3>Print / Export Report</h3>
+  <form onsubmit="event.preventDefault();doPrint()">
+    {% if columns|length > 1 or (columns|length == 1 and columns[0].type != 'actual') %}
+    {# Multi-column mode: columns already configured on screen #}
+    <div class="fg" style="font-size:12px;color:#aaa;margin-bottom:8px">
+      Printing {{ columns|length }} column{{ 's' if columns|length > 1 else '' }} as configured on screen.
+    </div>
+    <input type="hidden" id="pBegin" value="">
+    <input type="hidden" id="pEnd" value="">
+    <input type="hidden" id="pMode" value="report">
+    {% else %}
+    {# Single column: show date range fields #}
+    <div class="fg"><label>Opening Balance Date (blank = from inception)</label>
+      <input type="text" id="pBegin" placeholder="yyyy-mm-dd"></div>
+    <div class="fg"><label>Report As-of Date (blank = all dates)</label>
+      <input type="text" id="pEnd" placeholder="yyyy-mm-dd"></div>
+    <div class="fg"><label>Output</label>
+      <select id="pMode">
+        <option value="report">Report (balances only)</option>
+        <option value="ledger">Ledger (all transactions)</option>
+      </select></div>
+    {% endif %}
+    <div class="fg"><label style="display:flex;align-items:center;gap:6px;text-transform:none;font-size:12px">
+      <input type="checkbox" id="pHideZero"> Hide zero balances</label></div>
+    <div style="margin-top:10px;display:flex;gap:6px">
+      <button type="submit" class="btn btn-primary">Print</button>
+      <button type="button" class="btn" onclick="doPrintCSV()">CSV</button>
+      <button type="button" class="btn" onclick="document.getElementById('printDlg').classList.remove('show');document.getElementById('printOverlay').classList.remove('show')">Cancel</button>
+    </div>
+  </form>
+</div>
+
+<!-- Context Menu -->
+<div class="ctx-menu" id="ctxMenu">
+  <div data-action="add-line-above">Add Line Above</div>
+  <div data-action="add-line-below">Add Line Below</div>
+  <div class="sep"></div>
+  <div data-action="add-account-above">Insert Account Above</div>
+  <div data-action="add-account-below">Insert Account Below</div>
+  <div data-action="add-total">Insert Total Below</div>
+  <div data-action="add-label">Insert Label Below</div>
+  <div class="sep"></div>
+  <div data-action="move-up">Move Up <kbd>Ctrl+↑</kbd></div>
+  <div data-action="move-dn">Move Down <kbd>Ctrl+↓</kbd></div>
+  <div class="sep"></div>
+  <div data-action="rename">Rename</div>
+  <div data-action="indent-up">Indent + <kbd>→</kbd></div>
+  <div data-action="indent-dn">Indent − <kbd>←</kbd></div>
+  <div class="sep"></div>
+  <div data-action="sort-az">Sort Accounts A-Z</div>
+  <div class="sep"></div>
+  <div data-action="delete" class="danger">Delete</div>
+</div>
+
+<!-- Add Dialog -->
+<div class="overlay" id="overlay" onclick="closeDlg()"></div>
+<div class="dlg" id="dlg">
+  <h3 id="dlgTitle">Add Item</h3>
+  <form id="dlgForm">
+    <input type="hidden" id="dlgAction" value="">
+    <div class="fg" id="fgName"><label>Account Name</label><input type="text" id="inName" placeholder="e.g. BANK.NEW" style="text-transform:uppercase"></div>
+    <div class="fg" id="fgDesc"><label>Description</label><input type="text" id="inDesc"></div>
+    <div style="display:flex;gap:6px">
+      <div class="fg" style="flex:1" id="fgNB"><label>Normal Bal</label><select id="inNB"><option value="D">Debit</option><option value="C">Credit</option></select></div>
+      <div class="fg" style="flex:1" id="fgTT"><label>Total To</label><input type="text" id="inTT" style="text-transform:uppercase"></div>
+      <div class="fg" style="flex:1" id="fgIndent"><label>Indent</label><select id="inIndent"><option value="0">0</option><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option></select></div>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:6px">
+      <button type="submit" class="btn btn-primary">Add</button>
+      <button type="button" class="btn" onclick="closeDlg()">Cancel</button>
+    </div>
+  </form>
+</div>
+
+<script>
+const REPORT_ID = {{report.id}};
+const allRows = [];
+let selIdx = -1;
+
+function initRows() {
+  allRows.length = 0;
+  document.querySelectorAll('#rptBody tr[data-iid]').forEach(tr => allRows.push(tr));
+  if (allRows.length === 0) return;
+  // Check for hash anchor (e.g. #acct-GST.IN) and select that row
+  if (window.location.hash) {
+    const target = document.querySelector(window.location.hash);
+    if (target) {
+      const idx = allRows.indexOf(target);
+      if (idx >= 0) { selectRow(idx); return; }
+    }
+  }
+  selectRow(0);
+}
+
+function selectRow(i) {
+  if (i < 0 || i >= allRows.length) return;
+  if (selIdx >= 0 && selIdx < allRows.length) allRows[selIdx].classList.remove('row-sel');
+  selIdx = i;
+  allRows[selIdx].classList.add('row-sel');
+  allRows[selIdx].scrollIntoView({block:'nearest', behavior:'auto'});
+}
+function selItem() { return selIdx >= 0 ? allRows[selIdx] : null; }
+
+const ctx = document.getElementById('ctxMenu');
+function showCtx(x, y) {
+  ctx.classList.add('show');
+  const mw = ctx.offsetWidth, mh = ctx.offsetHeight;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (y + mh > vh - 8) y = y - mh;
+  if (x + mw > vw - 8) x = x - mw;
+  if (y < 4) y = 4;
+  if (x < 4) x = 4;
+  ctx.style.left = x+'px'; ctx.style.top = y+'px';
+}
+function hideCtx() { ctx.classList.remove('show'); }
+document.addEventListener('click', e => { if (!ctx.contains(e.target)) hideCtx(); });
+
+ctx.addEventListener('click', function(e) {
+  const div = e.target.closest('[data-action]');
+  if (!div) return;
+  hideCtx();
+  const action = div.dataset.action, tr = selItem();
+  const iid = tr ? tr.dataset.iid : null;
+  const pos = tr ? parseInt(tr.dataset.pos || '0') : 0;
+  // Get position for "above" - use position just before current row
+  const prevIdx = allRows.indexOf(tr) - 1;
+  const posBefore = prevIdx >= 0 ? parseInt(allRows[prevIdx].dataset.pos || '0') : 0;
+  switch(action) {
+    case 'add-line-above': quickAdd(posBefore,'label',''); break;
+    case 'add-line-below': quickAdd(pos,'label',''); break;
+    case 'add-account-above': openDlg('account', posBefore); break;
+    case 'add-account-below': openDlg('account', pos); break;
+    case 'add-total':   openDlg('total', pos); break;
+    case 'add-label':   openDlg('label', pos); break;
+    case 'move-up':     if(iid) doMove(iid, -1); break;
+    case 'move-dn':     if(iid) doMove(iid, 1); break;
+    case 'rename':      if(tr) doRename(tr); break;
+    case 'indent-up':   if(iid) doIndent(iid, 1); break;
+    case 'indent-dn':   if(iid) doIndent(iid, -1); break;
+    case 'sort-az':     doSortAZ(); break;
+    case 'delete':      if(iid) doDelete(iid); break;
+  }
+});
+
+/* Scroll-preserving reload: saves scrollY, reloads, restores position */
+function reloadKeepScroll() {
+  sessionStorage.setItem('grid_scrollY', window.scrollY);
+  sessionStorage.setItem('grid_selIdx', selIdx);
+  location.reload();
+}
+(function(){
+  const sy = sessionStorage.getItem('grid_scrollY');
+  const si = sessionStorage.getItem('grid_selIdx');
+  if (sy !== null) {
+    sessionStorage.removeItem('grid_scrollY');
+    sessionStorage.removeItem('grid_selIdx');
+    requestAnimationFrame(()=>{ window.scrollTo(0, parseInt(sy));
+      if (si !== null) { const idx = parseInt(si); if (idx >= 0 && idx < allRows.length) selectRow(idx); }
+    });
+  }
+})();
+
+function quickAdd(p,type,desc,sep) {
+  const fd = new FormData();
+  fd.append('item_type',type); fd.append('description',desc||'');
+  fd.append('after_position',p); fd.append('sep_style',sep||''); fd.append('indent','0');
+  fetch('/api/report/'+REPORT_ID+'/add-item',{method:'POST',body:fd})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error);});
+}
+function doDelete(iid) {
+  if (!confirm('Delete this row?')) return;
+  fetch('/api/report-item/'+iid+'/delete',{method:'POST'})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error);});
+}
+function doSortAZ() {
+  if (!confirm('Sort all account rows alphabetically within their current sections? Labels, totals, and separators stay in place.')) return;
+  fetch('/api/report/'+REPORT_ID+'/sort-accounts',{method:'POST'})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error);});
+}
+function doIndent(iid,dir) {
+  const tr = allRows[selIdx], td = tr.querySelector('td');
+  let cur=0; for(let c of td.classList){const m=c.match(/indent-(\d)/);if(m)cur=parseInt(m[1]);}
+  fetch('/api/report-item/'+iid+'/update',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({indent:Math.max(0,Math.min(3,cur+dir))})})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();});
+}
+
+function doMove(iid, dir) {
+  fetch('/api/report-item/'+iid+'/move',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({direction:dir})})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error||'Move failed');});
+}
+function doRename(tr) {
+  const desc = tr.querySelector('td').textContent.trim();
+  const nw = prompt('New description:', desc);
+  if (nw === null) return;
+  if (tr.dataset.id) {
+    fetch('/api/account/'+tr.dataset.id+'/rename',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({description:nw})})
+      .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error);});
+  } else {
+    fetch('/api/report-item/'+tr.dataset.iid+'/update',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({description:nw})})
+      .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();else alert(d.error);});
+  }
+}
+
+let dlgAfterPos = 0;
+function openDlg(type, afterPos) {
+  dlgAfterPos = afterPos;
+  document.getElementById('dlgAction').value = type;
+  // Clear all fields
+  document.getElementById('inName').value = '';
+  document.getElementById('inDesc').value = '';
+  document.getElementById('inTT').value = '';
+  document.getElementById('inNB').value = 'D';
+  document.getElementById('inIndent').value = '2';
+  const isAcct = type === 'account' || type === 'total';
+  document.getElementById('fgName').style.display = isAcct ? '' : 'none';
+  document.getElementById('fgNB').style.display = isAcct ? '' : 'none';
+  document.getElementById('fgTT').style.display = isAcct ? '' : 'none';
+  document.getElementById('fgDesc').style.display = type !== 'separator' ? '' : 'none';
+  document.getElementById('dlgTitle').textContent =
+    type === 'account' ? 'Add Account' : type === 'total' ? 'Add Total Account' : 'Add Label';
+  document.getElementById('overlay').classList.add('show');
+  document.getElementById('dlg').classList.add('show');
+  (isAcct ? document.getElementById('inName') : document.getElementById('inDesc')).focus();
+}
+function closeDlg() {
+  document.getElementById('overlay').classList.remove('show');
+  document.getElementById('dlg').classList.remove('show');
+}
+document.getElementById('dlgForm').addEventListener('submit', function(e) {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append('item_type', document.getElementById('dlgAction').value);
+  fd.append('account_name', document.getElementById('inName').value.toUpperCase());
+  fd.append('description', document.getElementById('inDesc').value);
+  fd.append('normal_balance', document.getElementById('inNB').value);
+  fd.append('total_to_1', document.getElementById('inTT').value.toUpperCase());
+  fd.append('indent', document.getElementById('inIndent').value);
+  fd.append('after_position', dlgAfterPos);
+  fetch('/api/report/'+REPORT_ID+'/add-item',{method:'POST',body:fd})
+    .then(r=>r.json()).then(d=>{if(d.ok){closeDlg();reloadKeepScroll();}else alert(d.error);});
+});
+
+// Inline editing of setup columns
+document.getElementById('rptBody').addEventListener('dblclick', function(e) {
+  const td = e.target.closest('td.setup[data-f]');
+  if (!td || td.querySelector('input')) return;
+  const field = td.dataset.f, iid = td.dataset.iid;
+  if (field === 'sep_style') return; // handled by click
+  if (!iid) { if(field==='name'){const tr=td.closest('tr');if(tr&&tr.dataset.id)doRename(tr);} return; }
+  const old = td.textContent.trim();
+  const inp = document.createElement('input');
+  inp.value = old; inp.style.textTransform = 'uppercase';
+  td.textContent = ''; td.appendChild(inp); inp.focus(); inp.select();
+  function save() {
+    const nw = inp.value.trim().toUpperCase(); td.textContent = nw;
+    if (nw !== old) fetch('/api/report-item/'+iid+'/update',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({[field]:nw})});
+  }
+  inp.addEventListener('blur', save);
+  inp.addEventListener('keydown', function(ev) {
+    if (ev.key==='Enter') {ev.preventDefault();inp.blur();}
+    if (ev.key==='Escape') {inp.value=old;inp.blur();}
+  });
+});
+
+// Sep column: click to cycle blank → S → D → blank
+document.getElementById('rptBody').addEventListener('click', function(e) {
+  const td = e.target.closest('td.setup[data-f="sep_style"]');
+  if (!td) return;
+  const iid = td.dataset.iid;
+  if (!iid) return;
+  const cur = td.textContent.trim();
+  let next, nextVal;
+  if (cur === '') { next = 'S'; nextVal = 'single'; }
+  else if (cur === 'S') { next = 'D'; nextVal = 'double'; }
+  else { next = ''; nextVal = ''; }
+  td.textContent = next;
+  fetch('/api/report-item/'+iid+'/update',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({sep_style:nextVal})})
+    .then(r=>r.json()).then(d=>{if(d.ok)reloadKeepScroll();});
+});
+
+function lastPos() {
+  if (allRows.length === 0) return 0;
+  const tr = selItem();
+  return parseInt((tr || allRows[allRows.length-1]).dataset.pos || '0');
+}
+
+// Keyboard + mouse
+document.addEventListener('keydown', function(e) {
+  if (e.target.tagName==='INPUT'||e.target.tagName==='SELECT'||e.target.tagName==='TEXTAREA') return;
+  const tr = selItem();
+  switch(e.key) {
+    case 'ArrowDown':
+      e.preventDefault();
+      if (e.ctrlKey && tr && tr.dataset.iid) { doMove(tr.dataset.iid, 1); }
+      else { selectRow(selIdx+1); }
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      if (e.ctrlKey && tr && tr.dataset.iid) { doMove(tr.dataset.iid, -1); }
+      else { selectRow(selIdx-1); }
+      break;
+    case 'Enter': case 'F3':
+      e.preventDefault();
+      if (tr && tr.dataset.id) location.href='/ledger/'+tr.dataset.id+'?from_report='+REPORT_ID;
+      break;
+    case 'F2': case 'Escape': e.preventDefault(); location.href='/'; break;
+    case '\\':
+      e.preventDefault();
+      if (tr) {
+        const r=tr.getBoundingClientRect(); showCtx(r.left+20,r.bottom);
+      } else {
+        // No rows — show menu at center of scroll area
+        const sc = document.getElementById('rptScroll');
+        const r = sc.getBoundingClientRect();
+        showCtx(r.left + 40, r.top + 40);
+      }
+      break;
+    case 'Delete':
+      e.preventDefault();
+      if (tr && tr.dataset.iid) doDelete(tr.dataset.iid);
+      break;
+    case 'ArrowRight':
+      e.preventDefault();
+      if (tr && tr.dataset.iid) doIndent(tr.dataset.iid, 1);
+      break;
+    case 'ArrowLeft':
+      e.preventDefault();
+      if (tr && tr.dataset.iid) doIndent(tr.dataset.iid, -1);
+      break;
+    case 'Tab':
+      e.preventDefault();
+      if (tr && tr.dataset.iid) doIndent(tr.dataset.iid, e.shiftKey ? -1 : 1);
+      break;
+  }
+});
+
+// Right-click: on a row selects it, on empty area still shows menu
+document.getElementById('rptScroll').addEventListener('contextmenu', function(e) {
+  e.preventDefault();
+  const tr = e.target.closest('tr[data-iid]');
+  if (tr) {
+    const i = allRows.indexOf(tr);
+    if (i >= 0) selectRow(i);
+  }
+  showCtx(e.clientX, e.clientY);
+});
+document.getElementById('rptBody').addEventListener('click', function(e) {
+  const tr = e.target.closest('tr[data-iid]');
+  if (tr && !e.target.closest('td.setup[data-f]') && !e.target.closest('a')) {
+    const i = allRows.indexOf(tr); if (i >= 0) selectRow(i);
+  }
+});
+initRows();
+
+function doPrint() {
+  const b = document.getElementById('pBegin').value;
+  const e = document.getElementById('pEnd').value;
+  const m = document.getElementById('pMode').value;
+  const hz = document.getElementById('pHideZero').checked ? '1' : '0';
+  window.open(`/report/${REPORT_ID}/print?begin=${encodeURIComponent(b)}&end=${encodeURIComponent(e)}&mode=${m}&hide_zero=${hz}`, '_blank');
+}
+function doPrintCSV() {
+  const b = document.getElementById('pBegin').value;
+  const e = document.getElementById('pEnd').value;
+  window.location.href = `/report/${REPORT_ID}/csv?begin=${encodeURIComponent(b)}&end=${encodeURIComponent(e)}`;
+}
+</script>
+{% endblock %}

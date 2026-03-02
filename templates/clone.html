@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}New File from Template{% endblock %}
+{% block breadcrumb %}<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>New File from Template</div>{% endblock %}
+
+{% block content %}
+<h2 style="font-size:14px;margin-bottom:10px">Create New Client File from Template</h2>
+<p style="font-size:11px;color:var(--muted);margin-bottom:14px">
+  Creates a copy of an existing file with the same chart of accounts, reports, and import rules — but with all transactions purged.
+</p>
+
+<form method="post" style="max-width:400px">
+  <div style="margin-bottom:10px">
+    <label style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted)">Source File (template)</label>
+    <select name="source" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:2px">
+      {% for c in clients %}
+      <option value="{{ c.path }}">{{ c.name }} — {{ c.company }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div style="margin-bottom:10px">
+    <label style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted)">New Company Name</label>
+    <input type="text" name="company" placeholder="e.g. Smith Holdings Ltd" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:2px">
+  </div>
+  <div style="margin-bottom:10px">
+    <label style="font-size:10px;font-weight:700;text-transform:uppercase;color:var(--muted)">New Folder Name</label>
+    <input type="text" name="folder" placeholder="e.g. SmithHoldings" style="width:100%;padding:4px 6px;font-size:12px;border:1px solid var(--border);border-radius:2px">
+  </div>
+  <button type="submit" class="btn btn-primary">Create</button>
+  <a href="/" class="btn">Cancel</a>
+</form>
+{% endblock %}

@@ -1,0 +1,195 @@
+{% extends "base.html" %}
+{% block title %}Import Rules{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>Import Rules &amp; Tax Codes</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .two-col { display:grid; grid-template-columns:2fr 1fr; gap:20px; }
+  @media (max-width:900px) { .two-col { grid-template-columns:1fr; } }
+  .panel { background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:16px; }
+  .panel h2 { font-size:14px; font-weight:600; margin:0 0 12px; color:var(--text); }
+  .rtbl { width:100%; border-collapse:collapse; font-size:12.5px; }
+  .rtbl th { text-align:left; padding:4px 8px; border-bottom:1px solid var(--border); font-size:11px;
+    font-weight:600; color:var(--muted); text-transform:uppercase; }
+  .rtbl td { padding:4px 8px; border-bottom:1px solid var(--border-light); vertical-align:middle; }
+  .rtbl tr:hover td { background:var(--surface-raised); }
+  .rtbl .mono { font-family:var(--mono); font-size:12px; }
+  .add-row { margin-top:12px; padding-top:12px; border-top:1px solid var(--border-light); }
+  .add-row .form-row { display:flex; gap:6px; flex-wrap:wrap; align-items:end; }
+  .add-row .fg { display:flex; flex-direction:column; }
+  .add-row label { font-size:10.5px; color:var(--muted); font-weight:600; text-transform:uppercase; margin-bottom:2px; }
+  .add-row input, .add-row select { padding:4px 8px; font-size:12.5px; border:1px solid var(--border);
+    border-radius:3px; font-family:var(--sans); }
+  .add-row input:focus, .add-row select:focus { outline:none; border-color:var(--accent); }
+  .del-btn { background:none; border:none; color:var(--faint); cursor:pointer; font-size:14px; padding:2px 6px; }
+  .del-btn:hover { color:var(--neg); }
+  .hint { font-size:11.5px; color:var(--muted); margin-bottom:10px; line-height:1.5; }
+</style>
+
+<div class="two-col">
+<!-- ─── Import Rules ─── -->
+<div class="panel">
+  <h2>Import Rules</h2>
+  <div style="display:flex;gap:6px;margin-bottom:8px">
+    <a href="/rules/export" class="btn btn-sm">Export Rules (CSV)</a>
+    <form action="/rules/import" method="post" enctype="multipart/form-data" style="display:flex;gap:4px;align-items:center">
+      <input type="file" name="file" accept=".csv" style="font-size:11px">
+      <button type="submit" class="btn btn-sm">Import</button>
+    </form>
+  </div>
+  <p class="hint">Rules auto-categorize imported transactions. When a keyword is found in the description,
+    the transaction is posted to the specified account instead of Suspense. Rules are matched by priority (highest first),
+    then first-match wins. Optionally attach a tax code for automatic GST/HST splitting.</p>
+  
+  <table class="rtbl">
+    <thead><tr><th>Keyword</th><th>Account</th><th>Tax</th><th>Pri</th><th>Notes</th><th></th></tr></thead>
+    <tbody>
+    {% for r in rules %}
+    <tr style="cursor:pointer" onclick="editRule({{ r.id }}, '{{ r.keyword|e }}', '{{ r.account_name|e }}', '{{ r.tax_code|e }}', {{ r.priority }}, '{{ r.notes|e }}')">
+      <td class="mono">{{ r.keyword }}</td>
+      <td class="mono">{{ r.account_name }}</td>
+      <td class="mono">{{ r.tax_code or '—' }}</td>
+      <td>{{ r.priority }}</td>
+      <td>{{ r.notes }}</td>
+      <td><form method="post" action="/rules/delete/{{ r.id }}" style="display:inline" onclick="event.stopPropagation()"><button class="del-btn" title="Delete">✕</button></form></td>
+    </tr>
+    {% endfor %}
+    {% if not rules %}<tr><td colspan="6" style="color:var(--faint);text-align:center;padding:12px">No rules yet — add one below</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  <div class="add-row">
+    <form method="post" action="/rules/save" id="rule-form">
+      <input type="hidden" name="rule_id" id="rule_id" value="">
+      <div class="form-row">
+        <div class="fg"><label id="rule-form-title">Add Rule</label></div>
+      </div>
+      <div class="form-row">
+        <div class="fg"><label>Keyword</label><input type="text" name="keyword" id="rule_kw" placeholder="e.g. Staples" required style="width:120px"></div>
+        <div class="fg" style="position:relative"><label>Account</label><input type="text" name="account_name" id="rule_acct" placeholder="e.g. EX.OFFICE" required style="width:110px;text-transform:uppercase" autocomplete="off"><div class="ac-dropdown" id="ruleAcctDD" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:3px;max-height:180px;overflow-y:auto;z-index:100;box-shadow:0 4px 12px rgba(0,0,0,0.2);font-size:11px"></div></div>
+        <div class="fg"><label>Tax Code</label>
+          <select name="tax_code" id="rule_tax" style="width:90px">
+            <option value="">None</option>
+            {% for tc in tax_codes %}<option value="{{ tc.id }}">{{ tc.id }} ({{ tc.rate_percent }}%)</option>{% endfor %}
+          </select>
+        </div>
+        <div class="fg"><label>Priority</label><input type="number" name="priority" id="rule_pri" value="1" style="width:50px"></div>
+        <div class="fg"><label>Notes</label><input type="text" name="notes" id="rule_notes" placeholder="optional" style="width:120px"></div>
+        <div class="fg"><label>&nbsp;</label><button type="submit" class="btn btn-sm btn-primary" id="rule-submit-btn">Add Rule</button></div>
+        <div class="fg" id="rule-cancel" style="display:none"><label>&nbsp;</label><button type="button" class="btn btn-sm" onclick="resetRuleForm()">Cancel</button></div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- ─── Tax Codes ─── -->
+<div class="panel">
+  <h2>Tax Codes</h2>
+  <p class="hint">Define tax rates for GST/HST splitting. When a rule has a tax code, the import calculates
+    tax as rate/(100+rate) of the total (tax-inclusive). The tax portion is posted to the appropriate GST account.</p>
+  
+  <table class="rtbl">
+    <thead><tr><th>Code</th><th>Description</th><th>Rate</th><th>Collected</th><th>Paid</th><th></th></tr></thead>
+    <tbody>
+    {% for tc in tax_codes %}
+    <tr style="cursor:pointer" onclick="editTax('{{ tc.id|e }}', '{{ tc.description|e }}', {{ tc.rate_percent }}, '{{ tc.collected_account|e }}', '{{ tc.paid_account|e }}')">
+      <td class="mono">{{ tc.id }}</td>
+      <td>{{ tc.description }}</td>
+      <td class="mono">{{ tc.rate_percent }}%</td>
+      <td class="mono">{{ tc.collected_account or '—' }}</td>
+      <td class="mono">{{ tc.paid_account or '—' }}</td>
+      <td><form method="post" action="/tax/delete/{{ tc.id }}" style="display:inline" onclick="event.stopPropagation()"><button class="del-btn" title="Delete">✕</button></form></td>
+    </tr>
+    {% endfor %}
+    {% if not tax_codes %}<tr><td colspan="6" style="color:var(--faint);text-align:center;padding:12px">No tax codes — add one below</td></tr>{% endif %}
+    </tbody>
+  </table>
+
+  <div class="add-row">
+    <form method="post" action="/tax/save">
+      <div class="form-row">
+        <div class="fg"><label>Code</label><input type="text" name="code_id" id="tax_code" placeholder="G5" required style="width:50px;text-transform:uppercase"></div>
+        <div class="fg"><label>Description</label><input type="text" name="description" id="tax_desc" placeholder="GST 5%" style="width:100px"></div>
+        <div class="fg"><label>Rate %</label><input type="number" name="rate_percent" id="tax_rate" step="0.01" value="5" style="width:60px"></div>
+        <div class="fg"><label>Collected Acct</label><input type="text" name="collected_account" id="tax_coll" value="GST.OUT" style="width:80px"></div>
+        <div class="fg"><label>Paid (ITC) Acct</label><input type="text" name="paid_account" id="tax_paid" value="GST.IN" style="width:80px"></div>
+        <div class="fg"><label>&nbsp;</label><button type="submit" class="btn btn-sm btn-primary">Save</button></div>
+      </div>
+    </form>
+  </div>
+</div>
+</div>
+
+<script>
+function editRule(id, kw, acct, tax, pri, notes) {
+  document.getElementById('rule_id').value = id;
+  document.getElementById('rule_kw').value = kw;
+  document.getElementById('rule_acct').value = acct;
+  document.getElementById('rule_tax').value = tax;
+  document.getElementById('rule_pri').value = pri;
+  document.getElementById('rule_notes').value = notes;
+  document.getElementById('rule-form-title').textContent = 'Edit Rule (click row to edit)';
+  document.getElementById('rule-submit-btn').textContent = 'Save';
+  document.getElementById('rule-cancel').style.display = '';
+  document.getElementById('rule_kw').focus();
+}
+function resetRuleForm() {
+  document.getElementById('rule_id').value = '';
+  document.getElementById('rule_kw').value = '';
+  document.getElementById('rule_acct').value = '';
+  document.getElementById('rule_tax').value = '';
+  document.getElementById('rule_pri').value = '1';
+  document.getElementById('rule_notes').value = '';
+  document.getElementById('rule-form-title').textContent = 'Add Rule';
+  document.getElementById('rule-submit-btn').textContent = 'Add Rule';
+  document.getElementById('rule-cancel').style.display = 'none';
+}
+
+// ── Account autocomplete for rules ──
+(function() {
+  const input = document.getElementById('rule_acct');
+  const dd = document.getElementById('ruleAcctDD');
+  let ahi = -1;
+  input.addEventListener('input', async function() {
+    const q = this.value.trim();
+    if (q.length < 1) { dd.style.display = 'none'; return; }
+    const r = await fetch('/api/account-search?q=' + encodeURIComponent(q));
+    const accts = await r.json();
+    dd.innerHTML = accts.map(a =>
+      `<div data-n="${a.name}" style="padding:3px 6px;cursor:pointer;display:flex;justify-content:space-between;color:var(--text)" onmouseover="this.style.background='var(--sel)'" onmouseout="this.style.background=''"><b>${a.name}</b><span style="color:var(--muted)">${a.description||''}</span></div>`
+    ).join('');
+    ahi = -1;
+    dd.style.display = accts.length > 0 ? 'block' : 'none';
+  });
+  dd.addEventListener('mousedown', function(e) {
+    e.preventDefault();
+    const it = e.target.closest('[data-n]');
+    if (it) { input.value = it.dataset.n; dd.style.display = 'none'; }
+  });
+  input.addEventListener('keydown', function(e) {
+    const items = dd.querySelectorAll('[data-n]');
+    if (dd.style.display === 'block') {
+      if (e.key === 'ArrowDown') { e.preventDefault(); ahi = Math.min(ahi+1, items.length-1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); ahi = Math.max(ahi-1, 0); }
+      else if ((e.key === 'Enter' || e.key === 'Tab') && ahi >= 0) {
+        e.preventDefault(); input.value = items[ahi].dataset.n; dd.style.display = 'none'; return;
+      } else if (e.key === 'Tab' && items.length === 1) {
+        input.value = items[0].dataset.n; dd.style.display = 'none'; return;
+      }
+      items.forEach((it,i) => it.style.background = i===ahi ? 'var(--sel)' : '');
+    }
+  });
+  input.addEventListener('blur', () => setTimeout(() => dd.style.display = 'none', 150));
+})();
+function editTax(code, desc, rate, coll, paid) {
+  document.getElementById('tax_code').value = code;
+  document.getElementById('tax_desc').value = desc;
+  document.getElementById('tax_rate').value = rate;
+  document.getElementById('tax_coll').value = coll;
+  document.getElementById('tax_paid').value = paid;
+  document.getElementById('tax_code').focus();
+}
+</script>
+{% endblock %}

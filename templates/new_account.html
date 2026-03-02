@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}New Account{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>New Account
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>New Account</h1>
+<p class="subtitle">Account names are short codes like BANK, AP.CC, EX.RENT</p>
+
+<form method="post" style="max-width:500px;">
+  <div class="form-group">
+    <label>Account Name</label>
+    <input type="text" name="name" placeholder="e.g. BANK, AP.CC, EX.RENT" required 
+           style="text-transform:uppercase" autofocus>
+  </div>
+  <div class="form-group">
+    <label>Description</label>
+    <input type="text" name="description" placeholder="e.g. TD Chequing Account">
+  </div>
+  <div class="form-group">
+    <label>Normal Balance</label>
+    <select name="normal_balance">
+      <option value="D">Debit (assets, expenses)</option>
+      <option value="C">Credit (liabilities, equity, revenue)</option>
+    </select>
+  </div>
+  <div style="margin-top:16px; display:flex; gap:8px;">
+    <button type="submit" class="btn btn-primary">Create Account</button>
+    <a href="/" class="btn">Cancel</a>
+  </div>
+</form>
+{% endblock %}

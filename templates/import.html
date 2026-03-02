@@ -1,0 +1,414 @@
+{% extends "base.html" %}
+{% block title %}Import Transactions{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>Import Transactions</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .imp { max-width:1060px; }
+  .step { font-size:13px; font-weight:600; color:var(--accent); margin:16px 0 8px;
+    padding-bottom:4px; border-bottom:1px solid var(--accent-bg); }
+  .fg { margin-bottom:10px; }
+  .fg>label { display:block; font-size:11px; font-weight:600; color:var(--muted);
+    text-transform:uppercase; letter-spacing:.3px; margin-bottom:2px; }
+  .fg select, .fg input[type="file"] { padding:5px 8px; font-size:13px; border:1px solid var(--border);
+    border-radius:3px; background:var(--surface); color:var(--text); }
+  .prev-table { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono);
+    margin:8px 0; background:var(--surface); }
+  .prev-table th { background:var(--surface-raised); padding:4px 8px; text-align:left; font-size:11px;
+    border:1px solid var(--border-light); color:var(--muted); }
+  .prev-table td { padding:3px 8px; border:1px solid var(--border-light); white-space:nowrap;
+    overflow:hidden; max-width:200px; text-overflow:ellipsis; }
+  .col-map { display:grid; grid-template-columns:repeat(4, 1fr); gap:6px 10px; margin:10px 0; }
+  .col-map .fg { margin-bottom:0; }
+  .err-list { background:var(--flash-err); border:1px solid #f0c8c8; border-radius:4px; padding:10px;
+    font-size:12px; color:#8b2020; max-height:200px; overflow-y:auto; margin:8px 0; }
+  .err-list div { padding:1px 0; }
+  .rp-table { width:100%; border-collapse:collapse; font-size:12.5px; background:var(--surface); margin:8px 0; }
+  .rp-table th { padding:4px 8px; text-align:left; font-size:10.5px; text-transform:uppercase;
+    color:var(--muted); border-bottom:2px solid var(--border); font-weight:600; }
+  .rp-table td { padding:3px 8px; border-bottom:1px solid var(--border-light); }
+  .rp-table .mono { font-family:var(--mono); font-size:12px; }
+  .rp-table .r { text-align:right; }
+  .rp-table .matched td { background:var(--flash-ok); }
+  .rp-table .unmatched td.acct { color:var(--neg); font-weight:500; }
+  .rp-summary { font-size:13px; margin:10px 0; padding:10px 14px; background:var(--surface-raised);
+    border-radius:4px; border:1px solid var(--border-light); }
+  .rp-summary strong { color:var(--accent); }
+  .date-box { background:var(--surface); border:1px solid var(--border); border-radius:6px;
+    padding:12px 16px; margin:10px 0; }
+  .date-box h3 { font-size:13px; margin:0 0 8px; color:var(--text); }
+  .date-compare { width:100%; border-collapse:collapse; font-size:12px; font-family:var(--mono); margin:6px 0; }
+  .date-compare th { text-align:left; padding:3px 10px; font-size:10.5px; color:var(--muted);
+    text-transform:uppercase; border-bottom:1px solid var(--border); }
+  .date-compare td { padding:3px 10px; border-bottom:1px solid var(--border-light); }
+  .date-compare .selected { background:var(--flash-ok); font-weight:600; }
+  .conf-tag { display:inline-block; font-size:10px; padding:1px 6px; border-radius:3px; font-weight:600; }
+  .conf-high { background:#2a5a3a; color:#7fda9f; }
+  .conf-ambiguous { background:#5a4a2a; color:#dac07f; }
+  .conf-low { background:#5a2a2a; color:#da7f7f; }
+</style>
+
+<div class="imp">
+<h1>Import Transactions</h1>
+<p style="font-size:12.5px;color:var(--muted);margin-bottom:10px">
+  Upload bank file (.csv, .xlsx, .xls) &rarr; confirm date format &rarr; map columns &rarr; review rules &rarr; import.</p>
+
+{% if errors is defined and errors %}
+  <div class="err-list">
+    <strong>{{ errors|length }} warning(s):</strong>
+    {% for e in errors %}<div>{{ e }}</div>{% endfor %}
+  </div>
+{% endif %}
+
+{% if rules_preview is defined and rules_preview %}
+{# ═══════════════════════════════════════════════════════════════ #}
+{# STEP 3: Rules Preview — confirm import                         #}
+{# ═══════════════════════════════════════════════════════════════ #}
+<div class="step">Step 3: Review Categorization</div>
+
+<!-- Refresh banner (hidden until a rule is added) -->
+<div id="rulesBanner" style="display:none;padding:10px 14px;background:#fffbe6;border:1px solid #e6d566;border-radius:4px;margin-bottom:10px;font-size:13px;align-items:center;gap:10px">
+  <span>📝 <strong id="bannerCount">0</strong> new rule(s) added.</span>
+  <form method="post" style="display:inline">
+    <input type="hidden" name="_step" value="refresh_preview">
+    <button type="submit" class="btn btn-sm btn-primary" style="margin-left:8px">↻ Refresh Preview</button>
+  </form>
+  <span style="font-size:11px;color:var(--muted);margin-left:8px">Re-applies all rules to see updated matches</span>
+</div>
+
+<div class="rp-summary">
+  <strong>{{ rules_preview|length }}</strong> transactions parsed
+  into <strong>{{ acct_name }}</strong>.
+  <strong>{{ matched_count }}</strong> matched rules,
+  <strong>{{ rules_preview|length - matched_count }}</strong> &rarr; EX.SUSP (uncategorized).
+  <a href="{{ url_for('import_rules_page') }}" target="_blank" style="margin-left:8px;font-size:12px">Edit rules &#8599;</a>
+</div>
+
+<div style="max-height:420px; overflow-y:auto; border:1px solid var(--border-light); border-radius:4px;">
+<table class="rp-table">
+  <thead><tr><th>Date</th><th>Description</th><th class="r">Amount</th><th>&rarr; Account</th><th>Tax</th><th style="width:30px"></th></tr></thead>
+  <tbody>
+  {% for p in rules_preview %}
+  <tr class="{{ 'matched' if p.rule_acct != 'EX.SUSP' else 'unmatched' }}" id="rp-{{ loop.index0 }}">
+    <td class="mono">{{ p.date }}</td>
+    <td style="max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ p.desc }}">{{ p.desc }}</td>
+    <td class="mono r {% if p.amount > 0 %}pos{% else %}neg{% endif %}">{{ fmt(p.amount) }}</td>
+    <td class="mono acct">{{ p.rule_acct }}</td>
+    <td class="mono">{% if p.tax_split %}{{ p.rule_tax }} ({{ fmt(p.tax_split.tax) }}){% else %}&mdash;{% endif %}</td>
+    <td>{% if p.rule_acct == 'EX.SUSP' %}<button type="button" class="btn btn-sm rule-add-btn" style="font-size:10px;padding:1px 6px" data-desc="{{ p.desc|e }}" title="Add a rule for this transaction">+</button>{% endif %}</td>
+  </tr>
+  {% endfor %}
+  </tbody>
+</table>
+</div>
+
+<!-- Inline Rule Add Popup -->
+<div id="rulePopup" style="display:none;position:fixed;z-index:400;background:var(--surface);border:1px solid var(--border);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.3);width:420px;padding:14px 16px;font-size:12px">
+  <div style="font-weight:700;font-size:13px;margin-bottom:10px">Add Import Rule</div>
+  <div style="font-size:11px;color:var(--muted);margin-bottom:10px;word-break:break-all" id="ruleFullDesc"></div>
+  <div style="margin-bottom:8px">
+    <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Keyword (type the keyword to match, e.g. "STAPLES")</label>
+    <input type="text" id="ruleKeyword" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:12px;border:1px solid var(--border);border-radius:3px;box-sizing:border-box;text-transform:uppercase" autocomplete="off">
+  </div>
+  <div style="display:flex;gap:8px;margin-bottom:8px">
+    <div style="flex:1">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Account</label>
+      <div style="position:relative" class="rule-acct-wrap">
+        <input type="text" id="ruleAccount" style="width:100%;padding:5px 8px;font-family:var(--mono);font-size:12px;border:1px solid var(--border);border-radius:3px;box-sizing:border-box;text-transform:uppercase" autocomplete="off" placeholder="e.g. EX.OFFICE">
+        <div id="ruleAcctDD" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:3px;max-height:150px;overflow-y:auto;z-index:410;box-shadow:0 4px 12px rgba(0,0,0,0.2)"></div>
+      </div>
+    </div>
+    <div style="width:100px">
+      <label style="font-size:10px;font-weight:600;color:var(--muted);display:block;margin-bottom:2px">Tax Code</label>
+      <select id="ruleTax" style="width:100%;padding:5px 4px;font-size:12px;border:1px solid var(--border);border-radius:3px">
+        {% if tax_codes is defined %}{% for tc in tax_codes %}
+        <option value="{{ tc.id }}" {% if tc.id == 'G5' %}selected{% endif %}>{{ tc.id }} — {{ tc.description }}</option>
+        {% endfor %}{% endif %}
+      </select>
+    </div>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:flex-end">
+    <button class="btn btn-sm" onclick="closeRuleAdd()">Cancel</button>
+    <button class="btn btn-sm btn-primary" id="ruleSaveBtn" onclick="saveRule()">Save Rule</button>
+  </div>
+  <div id="ruleError" style="display:none;color:var(--neg);font-size:11px;margin-top:6px"></div>
+</div>
+
+<form method="post" style="margin-top:14px;">
+  <input type="hidden" name="_step" value="do_import">
+  <div style="display:flex; gap:8px; margin-top:6px;">
+    <button type="submit" class="btn btn-primary">Confirm Import ({{ rules_preview|length }} txns)</button>
+    <a href="{{ url_for('csv_import') }}" class="btn">Start Over</a>
+  </div>
+</form>
+
+<script>
+let rulesAdded = 0;
+let currentRuleBtn = null;
+
+// Event delegation for + buttons (avoids quote-escaping issues in onclick)
+document.addEventListener('click', function(e) {
+  const btn = e.target.closest('.rule-add-btn');
+  if (btn) openRuleAdd(btn, btn.dataset.desc);
+});
+
+function openRuleAdd(btn, desc) {
+  currentRuleBtn = btn;
+  const popup = document.getElementById('rulePopup');
+  document.getElementById('ruleFullDesc').textContent = desc;
+  document.getElementById('ruleKeyword').value = desc;
+  document.getElementById('ruleAccount').value = '';
+  document.getElementById('ruleError').style.display = 'none';
+  
+  // Position near the button
+  const rect = btn.getBoundingClientRect();
+  popup.style.left = Math.min(rect.left, window.innerWidth - 440) + 'px';
+  popup.style.top = Math.min(rect.bottom + 4, window.innerHeight - 260) + 'px';
+  popup.style.display = 'block';
+  
+  // Select keyword text so user can immediately type over
+  setTimeout(() => {
+    const kw = document.getElementById('ruleKeyword');
+    kw.focus();
+    kw.select();
+  }, 50);
+}
+
+function closeRuleAdd() {
+  document.getElementById('rulePopup').style.display = 'none';
+  currentRuleBtn = null;
+}
+
+async function saveRule() {
+  const keyword = document.getElementById('ruleKeyword').value.trim();
+  const account = document.getElementById('ruleAccount').value.trim().toUpperCase();
+  const tax = document.getElementById('ruleTax').value;
+  const errEl = document.getElementById('ruleError');
+  
+  if (!keyword || !account) {
+    errEl.textContent = 'Keyword and account are required';
+    errEl.style.display = 'block';
+    return;
+  }
+  
+  const r = await fetch('/api/rule-add', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({keyword, account_name: account, tax_code: tax, priority: 5})
+  });
+  const d = await r.json();
+  
+  if (!d.ok) {
+    errEl.textContent = d.error;
+    errEl.style.display = 'block';
+    return;
+  }
+  
+  // Success — mark the row, update banner
+  if (currentRuleBtn) {
+    const tr = currentRuleBtn.closest('tr');
+    tr.querySelector('.acct').textContent = account;
+    tr.querySelector('.acct').style.color = '';
+    currentRuleBtn.remove();
+  }
+  
+  rulesAdded++;
+  const banner = document.getElementById('rulesBanner');
+  document.getElementById('bannerCount').textContent = rulesAdded;
+  banner.style.display = 'flex';
+  
+  closeRuleAdd();
+}
+
+// Account autocomplete for rule popup
+(function() {
+  const input = document.getElementById('ruleAccount');
+  const dd = document.getElementById('ruleAcctDD');
+  if (!input || !dd) return;
+  let ahi = -1;
+  
+  input.addEventListener('input', async function() {
+    const q = this.value.trim();
+    if (q.length < 1) { dd.style.display = 'none'; return; }
+    const r = await fetch('/api/account-search?q=' + encodeURIComponent(q) + '&posting=1');
+    const accts = await r.json();
+    dd.innerHTML = accts.map((a,i) =>
+      '<div data-n="' + a.name + '" style="padding:4px 8px;cursor:pointer;font-size:11px;display:flex;justify-content:space-between;color:var(--text)" onmouseover="this.style.background=\'var(--sel)\'" onmouseout="this.style.background=\'\'"><b>' + a.name + '</b><span style="color:var(--muted)">' + (a.description||'') + '</span></div>'
+    ).join('');
+    ahi = -1;
+    dd.style.display = accts.length > 0 ? 'block' : 'none';
+  });
+  
+  dd.addEventListener('click', function(e) {
+    const it = e.target.closest('[data-n]');
+    if (it) { input.value = it.dataset.n; dd.style.display = 'none'; }
+  });
+  
+  input.addEventListener('keydown', function(e) {
+    const items = dd.querySelectorAll('[data-n]');
+    if (dd.style.display !== 'none' && items.length > 0) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); ahi = Math.min(ahi+1, items.length-1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); ahi = Math.max(ahi-1, 0); }
+      else if ((e.key === 'Enter' || e.key === 'Tab') && ahi >= 0) {
+        e.preventDefault(); input.value = items[ahi].dataset.n; dd.style.display = 'none'; return;
+      } else if (e.key === 'Tab' && items.length === 1) {
+        input.value = items[0].dataset.n; dd.style.display = 'none'; return;
+      }
+      items.forEach((it,i) => it.style.background = i===ahi ? 'var(--sel)' : '');
+    }
+    if (e.key === 'Enter' && dd.style.display === 'none') {
+      e.preventDefault();
+      saveRule();
+    }
+  });
+  
+  input.addEventListener('blur', () => setTimeout(() => dd.style.display = 'none', 150));
+  
+  // Escape closes the popup
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape' && document.getElementById('rulePopup').style.display !== 'none') {
+      e.preventDefault();
+      closeRuleAdd();
+    }
+  });
+})();
+</script>
+
+{% elif headers is defined and headers %}
+{# ═══════════════════════════════════════════════════════════════ #}
+{# STEP 2: Column Mapping + Date Confirmation                     #}
+{# ═══════════════════════════════════════════════════════════════ #}
+<form method="post">
+  <input type="hidden" name="_step" value="preview">
+  <input type="hidden" name="account_id" value="{{ account_id }}">
+
+  {# ── Date Format Detection ── #}
+  {% if date_comparisons is defined and date_comparisons %}
+  <div class="step">Date Format</div>
+  <div class="date-box">
+    <h3 style="display:flex;align-items:center;gap:8px">
+      {% if all_parse_fail == 0 %}
+        <span style="color:#5a5">&#10003;</span> All {{ all_parse_ok }} dates parsed OK
+      {% else %}
+        <span style="color:#d55">&#10007;</span> {{ all_parse_fail }} of {{ all_parse_ok + all_parse_fail }} dates could not be parsed
+      {% endif %}
+      <span class="conf-tag conf-{{ date_confidence }}">{{ date_confidence }}</span>
+    </h3>
+    <p style="font-size:11.5px;color:var(--muted);margin:4px 0">{{ date_detail }}</p>
+
+    <table class="date-compare">
+      <thead>
+        <tr>
+          <th>In File</th>
+          <th>&rarr; Grid Date (yyyy-mm-dd)</th>
+          {% if has_ambiguous is defined and has_ambiguous %}
+          <th>if MM/DD</th>
+          <th>if DD/MM</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+      {% for dc in date_comparisons %}
+      <tr>
+        <td>{{ dc.raw }}</td>
+        <td class="{% if dc.ok %}selected{% else %}{% endif %}" style="{% if not dc.ok %}color:#d55;font-weight:600{% endif %}">
+          {{ dc.parsed or '&#10007; FAILED' }}
+        </td>
+        {% if has_ambiguous is defined and has_ambiguous %}
+        <td style="{% if date_fmt == 'MDY' %}font-weight:600{% else %}color:var(--muted){% endif %}">{{ dc.MDY or '&#10005;' }}</td>
+        <td style="{% if date_fmt == 'DMY' %}font-weight:600{% else %}color:var(--muted){% endif %}">{{ dc.DMY or '&#10005;' }}</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+
+    {% if has_ambiguous is defined and has_ambiguous %}
+    <div style="margin-top:8px">
+      <label style="font-size:12px;font-weight:600;color:var(--muted)">Numeric dates are ambiguous &mdash; confirm format:</label>
+      <select name="date_format" style="padding:4px 8px;font-size:12.5px">
+        <option value="MDY" {% if date_fmt == 'MDY' %}selected{% endif %}>MM/DD/YYYY (North American)</option>
+        <option value="DMY" {% if date_fmt == 'DMY' %}selected{% endif %}>DD/MM/YYYY (European)</option>
+      </select>
+    </div>
+    {% else %}
+    <input type="hidden" name="date_format" value="{{ date_fmt }}">
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {# ── File Preview ── #}
+  <div class="step">File Preview &mdash; {{ total_rows }} data rows (showing first {{ preview_rows|length }})</div>
+  <div style="overflow-x:auto">
+  <table class="prev-table">
+    <thead><tr>{% for h in headers %}<th>Col {{ loop.index0 }}: {{ h }}</th>{% endfor %}</tr></thead>
+    <tbody>{% for row in preview_rows %}<tr>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+  </table>
+  </div>
+
+  {# ── Column Mapping ── #}
+  <div class="step">Map Columns</div>
+  <p style="font-size:12px;color:var(--muted);margin-bottom:8px">Use either a single Amount column, OR separate Debit/Credit columns.</p>
+  <div class="col-map">
+    <div class="fg"><label>Date *</label>
+      <select name="col_date" required>
+        <option value="">--</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}" {% if best_date_col is defined and loop.index0 == best_date_col %}selected{% endif %}>{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Description *</label>
+      <select name="col_desc" required>
+        <option value="">--</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Description 2 (merge)</label>
+      <select name="col_desc2">
+        <option value="-1">-- none --</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Reference</label>
+      <select name="col_ref">
+        <option value="-1">-- none --</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Amount (+/-)</label>
+      <select name="col_amount">
+        <option value="-1">-- none --</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Debit Column</label>
+      <select name="col_debit">
+        <option value="-1">-- none --</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+    <div class="fg"><label>Credit Column</label>
+      <select name="col_credit">
+        <option value="-1">-- none --</option>
+        {% for h in headers %}<option value="{{ loop.index0 }}">{{ loop.index0 }}: {{ h }}</option>{% endfor %}
+      </select></div>
+  </div>
+  <div class="fg"><label><input type="checkbox" name="skip_header" value="1" checked> Skip first row (header)</label></div>
+  <div class="fg"><label><input type="checkbox" name="flip_sign" value="1"> Flip sign (swap +/−) — use for credit card files where charges are negative</label></div>
+  <div style="margin-top:8px; display:flex; gap:8px;">
+    <button type="submit" class="btn btn-primary">Preview with Rules &rarr;</button>
+    <a href="{{ url_for('csv_import') }}" class="btn">Cancel</a>
+  </div>
+</form>
+
+{% else %}
+{# ═══════════════════════════════════════════════════════════════ #}
+{# STEP 1: Upload                                                 #}
+{# ═══════════════════════════════════════════════════════════════ #}
+<form method="post" enctype="multipart/form-data">
+  <div class="step">Step 1: Select account &amp; upload file</div>
+  <div class="fg"><label>Import into Account</label>
+    <select name="account_id" required>{% for a in accounts %}{% if a.account_type == 'posting' %}
+      <option value="{{ a.id }}">{{ a.name }} &mdash; {{ a.description }}</option>{% endif %}{% endfor %}</select></div>
+  <div class="fg"><label>Bank File (.csv, .xlsx, .xls)</label>
+    <input type="file" name="csv_file" accept=".csv,.xlsx,.xls,.txt,.tsv" required></div>
+  <button type="submit" class="btn btn-primary" style="margin-top:4px">Upload &amp; Detect Format &rarr;</button>
+</form>
+{% endif %}
+</div>
+{% endblock %}

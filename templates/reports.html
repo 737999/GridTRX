@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Reports{% endblock %}
+{% block content %}
+<div class="container">
+<h1>Reports</h1>
+<p class="subtitle">Generate printable reports for {{ company }}. FYE {{ fiscal_display }}.</p>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+{% for cat, msg in messages %}
+<div class="flash flash-{{ cat }}">{{ msg }}</div>
+{% endfor %}{% endwith %}
+
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:12px; max-width:900px">
+
+  <!-- General Ledger -->
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px 16px">
+    <h2>General Ledger</h2>
+    <p class="subtitle">All accounts with transaction detail. BS accounts show opening balance; IS accounts start at zero.</p>
+    <form method="get" action="/reports/gl" target="_blank">
+      <div class="form-row" style="margin-bottom:6px">
+        <div class="form-group"><label>Period Begin</label><input type="text" name="begin" value="{{ fy_begin }}" placeholder="yyyy-mm-dd"></div>
+        <div class="form-group"><label>Period End</label><input type="text" name="end" value="{{ fy_end }}" placeholder="yyyy-mm-dd"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:8px">
+        <label>Filter</label>
+        <select name="filter">
+          <option value="all">All Transactions</option>
+          <option value="debit">Debits Only</option>
+          <option value="credit">Credits Only</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button type="submit" name="fmt" value="pdf" class="btn btn-sm btn-primary">PDF</button>
+        <button type="submit" name="fmt" value="csv" class="btn btn-sm">CSV</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Account Detail -->
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px 16px">
+    <h2>Account Detail</h2>
+    <p class="subtitle">Single account ledger with running balance. Knows BS vs IS for opening balance.</p>
+    <form method="get" action="/reports/account" target="_blank">
+      <div class="form-group" style="margin-bottom:6px;position:relative">
+        <label>Account</label>
+        <input type="text" name="account" id="rptAcctInput" placeholder="Type to search..." autocomplete="off" style="text-transform:uppercase">
+        <div id="rptAcctDrop" style="display:none;position:absolute;z-index:100;top:100%;left:0;right:0;background:var(--surface);border:1px solid var(--border);border-radius:3px;max-height:180px;overflow-y:auto;font-size:11px;box-shadow:0 2px 8px rgba(0,0,0,.15)"></div>
+      </div>
+      <div class="form-row" style="margin-bottom:6px">
+        <div class="form-group"><label>Period Begin</label><input type="text" name="begin" value="{{ fy_begin }}" placeholder="yyyy-mm-dd"></div>
+        <div class="form-group"><label>Period End</label><input type="text" name="end" value="{{ fy_end }}" placeholder="yyyy-mm-dd"></div>
+      </div>
+      <div class="form-group" style="margin-bottom:8px">
+        <label>Filter</label>
+        <select name="filter">
+          <option value="all">All Transactions</option>
+          <option value="debit">Debits Only</option>
+          <option value="credit">Credits Only</option>
+        </select>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button type="submit" name="fmt" value="pdf" class="btn btn-sm btn-primary">PDF</button>
+        <button type="submit" name="fmt" value="csv" class="btn btn-sm">CSV</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Balance Sheet -->
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px 16px">
+    <h2>Balance Sheet</h2>
+    <p class="subtitle">Formatted BS report as of a given date.</p>
+    <form method="get" action="/reports/formatted">
+      <input type="hidden" name="report" value="BS">
+      <div class="form-group" style="margin-bottom:6px"><label>As of Date</label><input type="text" name="end" value="{{ fy_end }}" placeholder="yyyy-mm-dd"></div>
+      <div style="display:flex;gap:4px">
+        <button type="submit" name="fmt" value="pdf" class="btn btn-sm btn-primary">PDF</button>
+        <button type="submit" name="fmt" value="csv" class="btn btn-sm">CSV</button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Income Statement -->
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:4px; padding:12px 16px">
+    <h2>Income Statement</h2>
+    <p class="subtitle">Formatted IS for a given period.</p>
+    <form method="get" action="/reports/formatted">
+      <input type="hidden" name="report" value="IS">
+      <div class="form-row" style="margin-bottom:6px">
+        <div class="form-group"><label>Period Begin</label><input type="text" name="begin" value="{{ fy_begin }}" placeholder="yyyy-mm-dd"></div>
+        <div class="form-group"><label>Period End</label><input type="text" name="end" value="{{ fy_end }}" placeholder="yyyy-mm-dd"></div>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button type="submit" name="fmt" value="pdf" class="btn btn-sm btn-primary">PDF</button>
+        <button type="submit" name="fmt" value="csv" class="btn btn-sm">CSV</button>
+      </div>
+    </form>
+  </div>
+
+</div>
+</div>
+
+<script>
+(function(){
+  const inp = document.getElementById('rptAcctInput');
+  const drop = document.getElementById('rptAcctDrop');
+  if (!inp || !drop) return;
+  let debounce;
+  inp.addEventListener('input', function(){
+    clearTimeout(debounce);
+    const q = inp.value.trim();
+    if (q.length < 1) { drop.style.display='none'; return; }
+    debounce = setTimeout(()=>{
+      fetch('/api/account-search?q='+encodeURIComponent(q)+'&posting=1')
+        .then(r=>r.json()).then(data=>{
+          if (!data.length) { drop.style.display='none'; return; }
+          drop.innerHTML = data.map(a =>
+            `<div style="padding:3px 8px;cursor:pointer;border-bottom:1px solid var(--border-light)" data-name="${a.name}" onmouseover="this.style.background='var(--accent-bg)'" onmouseout="this.style.background=''"><b>${a.name}</b> <span style="color:var(--muted)">${a.description}</span></div>`
+          ).join('');
+          drop.style.display='block';
+          drop.querySelectorAll('div').forEach(d => d.addEventListener('click', ()=>{
+            inp.value = d.dataset.name;
+            drop.style.display='none';
+          }));
+        });
+    }, 150);
+  });
+  inp.addEventListener('blur', ()=>{ setTimeout(()=>drop.style.display='none', 200); });
+})();
+</script>
+{% endblock %}
