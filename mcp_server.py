@@ -406,6 +406,104 @@ def delete_rule(db_path: str, rule_id: int) -> dict:
 
 
 @mcp.tool()
+def import_tb(db_path: str, csv_path: str, date: str = "2025-01-01") -> dict:
+    """Import a trial balance CSV and post as one compound journal entry.
+
+    CSV format: Account, Description, Debit, Credit.
+    For each row, creates the account if it doesn't already exist
+    (debit-balance accounts get normal_balance='D', credit get 'C').
+    Posts one balanced compound journal entry dated as of the date parameter.
+    The entry must balance — raises an error if total debits ≠ total credits.
+    """
+    _init(db_path)
+    csv_path = _check_path(csv_path, "csv_path")
+    if not os.path.exists(csv_path):
+        raise ValueError(f"File not found: {csv_path}")
+
+    date = _normalize_date(date)
+    if not date:
+        raise ValueError("Invalid date. Use YYYY-MM-DD format.")
+
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        rows_raw = list(reader)
+
+    if not rows_raw:
+        raise ValueError("Empty CSV file")
+
+    # Detect header row
+    header = [h.strip().lower() for h in rows_raw[0]]
+    has_header = "account" in header or "description" in header
+    start = 1 if has_header else 0
+
+    accounts_created = []
+    lines = []
+
+    for row in rows_raw[start:]:
+        if len(row) < 4:
+            continue
+
+        acct_name = row[0].strip()
+        description = row[1].strip()
+        dr_str = row[2].strip()
+        cr_str = row[3].strip()
+
+        if not acct_name or not description:
+            continue
+        # Skip total rows
+        if acct_name.upper() in ("TOTALS", "TOTAL"):
+            continue
+        if description.upper() in ("TOTALS", "TOTAL"):
+            continue
+
+        dr_cents = models.parse_amount(dr_str) if dr_str else 0
+        cr_cents = models.parse_amount(cr_str) if cr_str else 0
+
+        if dr_cents == 0 and cr_cents == 0:
+            continue
+
+        # Determine normal balance and line amount
+        if dr_cents > 0:
+            normal = "D"
+            amount_cents = dr_cents       # positive = debit
+        else:
+            normal = "C"
+            amount_cents = -cr_cents      # negative = credit
+
+        # Find or create account
+        acct = models.get_account_by_name(acct_name)
+        if not acct:
+            acct_id = models.add_account(acct_name, normal, description)
+            accounts_created.append(acct_name)
+        else:
+            acct_id = acct["id"]
+
+        lines.append((acct_id, amount_cents, description))
+
+    if not lines:
+        raise ValueError("No valid data rows found in CSV")
+
+    # Verify the entry balances
+    total = sum(l[1] for l in lines)
+    if total != 0:
+        raise ValueError(
+            f"Trial balance does not balance: off by {total / 100:.2f}"
+        )
+
+    ref = models.generate_ref()
+    txn_id = models.add_transaction(date, ref, "Opening balances", lines)
+
+    return {
+        "txn_id": txn_id,
+        "reference": ref,
+        "date": date,
+        "lines_posted": len(lines),
+        "accounts_created": len(accounts_created),
+        "new_accounts": accounts_created,
+    }
+
+
+@mcp.tool()
 def import_csv(db_path: str, csv_path: str, bank_account: str) -> dict:
     """Import a bank CSV file into the books. Applies import rules to auto-categorize.
 
