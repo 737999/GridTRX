@@ -1144,11 +1144,14 @@ def new_transaction(account_id=None):
                 
                 txn_id = models.add_transaction(date_str, reference, description, lines)
             
-            flash('Transaction posted', 'success')
+            if not description or not description.strip():
+                flash('Transaction posted — warning: blank description', 'warning')
+            else:
+                flash('Transaction posted', 'success')
             if account_id:
                 return redirect(url_for('account_ledger', account_id=account_id))
             return redirect(url_for('home'))
-            
+
         except ValueError as e:
             flash(str(e), 'error')
             return redirect(request.url)

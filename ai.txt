@@ -39,6 +39,9 @@ find bank                           # Search accounts by name
 search rent                         # Search transactions by description
 rules                               # List all import rules
 info                                # Company name, fiscal year, lock date
+trace RE                            # Trace accumulation tree for a total
+trace RE 2025-12-31                 # Trace as of a date
+trace NETEARN 2025-01-01 2025-12-31 # Trace for a date range
 
 ### Write Operations
 post 2025-03-01 "March rent" 1500.00 EX.RENT BANK.CHQ
@@ -179,6 +182,17 @@ accounts logically — don't reorganize. Map client accounts to GridTRX naming
 ### Validate
 Run `validate` after any report setup to check the chain is intact:
   python cli.py books.db validate
+
+Validate checks: total-to chain, RE.OFS/RE.OPEN exist, BS balances,
+**BS RE vs IS RE.CLOSE match** (catches duplicates, chain errors, conversion artifacts),
+and orphan total-to targets.
+
+### Trace
+Trace the accumulation tree for any account to see what feeds into it:
+  python cli.py books.db trace RE
+  python cli.py books.db trace NETEARN 2024-06-01 2025-05-31
+
+Shows each contributor's own balance, received accumulation, and dumped value.
 
 ## Important Notes
 - Lock date prevents posting to closed periods (floor). Check with: lock

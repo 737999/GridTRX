@@ -600,6 +600,27 @@ def year_end(db_path: str, ye_date: str) -> dict:
 
 
 @mcp.tool()
+def trace_account(db_path: str, account_name: str,
+                  date_from: str = "", date_to: str = "") -> dict:
+    """Trace the full accumulation tree for a report account.
+
+    Shows what feeds into the account total, with amounts and sources.
+    Useful for understanding why a total shows a particular number.
+
+    Args:
+        account_name: Account name to trace (e.g. RE, NETEARN, TOTREV)
+        date_from: Optional start date (YYYY-MM-DD) for date range
+        date_to: Optional end date (YYYY-MM-DD) for as-of or range
+
+    Returns dict with: name, display, contributors list, feeds_into list.
+    """
+    _init(db_path)
+    df = _normalize_date(date_from) if date_from else None
+    dt = _normalize_date(date_to) if date_to else None
+    return models.trace_account(account_name, df, dt)
+
+
+@mcp.tool()
 def set_lock_date(db_path: str, lock_date: str = "") -> dict:
     """Show or set the lock date. Transactions on or before the lock date cannot be posted, edited, or deleted.
 

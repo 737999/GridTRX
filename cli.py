@@ -881,6 +881,9 @@ class GridCLI(cmd.Cmd):
         if not self._check_posting_account(cr_acct):
             return
 
+        if not desc or not desc.strip():
+            print("  ⚠ Warning: blank description. Transactions should have descriptions for audit trail.")
+
         try:
             txn_id = models.add_simple_transaction(date_str, '', desc, dr_acct['id'], cr_acct['id'], cents)
             txn, lines = models.get_transaction(txn_id)
@@ -928,6 +931,9 @@ class GridCLI(cmd.Cmd):
             return
         if not self._check_ceiling_date(date_str):
             return
+
+        if not desc or not desc.strip():
+            print("  ⚠ Warning: blank description. Transactions should have descriptions for audit trail.")
 
         lines = []
         running = 0
@@ -1235,6 +1241,17 @@ class GridCLI(cmd.Cmd):
             if len(all_errors) > 20:
                 print(f"    ... and {len(all_errors) - 20} more")
 
+        # Show possible duplicates
+        dupes = result.get('possible_duplicates', [])
+        if dupes:
+            print(f"\n  ⚠ Possible duplicates ({len(dupes)}):")
+            print(f"    These rows match existing transactions (same date + amount).")
+            print(f"    They were posted — review and delete if they are actual duplicates.")
+            for d in dupes[:10]:
+                print(f"    Row {d['row']}: {d['date']}  {models.fmt_amount(abs(d['amount'])):>12s}  {d['description']}")
+            if len(dupes) > 10:
+                print(f"    ... and {len(dupes) - 10} more")
+
         # Next steps
         if suspense:
             print(f"\n  {suspense} items went to suspense (no matching rule).")
@@ -1292,6 +1309,17 @@ class GridCLI(cmd.Cmd):
                 print(f"    Row {e['row']}: {e['reason']}")
             if len(result['errors']) > 20:
                 print(f"    ... and {len(result['errors']) - 20} more")
+
+        # Show possible duplicates
+        dupes = result.get('possible_duplicates', [])
+        if dupes:
+            print(f"\n  ⚠ Possible duplicates ({len(dupes)}):")
+            print(f"    These rows match existing transactions (same date + amount).")
+            print(f"    They were posted — review and delete if they are actual duplicates.")
+            for d in dupes[:10]:
+                print(f"    Row {d['row']}: {d['date']}  {models.fmt_amount(abs(d['amount'])):>12s}  {d['description']}")
+            if len(dupes) > 10:
+                print(f"    ... and {len(dupes) - 10} more")
 
         if result['to_suspense']:
             print(f"\n  {result['to_suspense']} items went to suspense (no matching rule).")
@@ -2062,6 +2090,73 @@ class GridCLI(cmd.Cmd):
             print("  All checks passed.")
         elif errors:
             print(f"\n  {len(errors)} error(s) found. The report chain has problems.")
+        print()
+
+    def do_trace(self, arg):
+        """Trace the accumulation tree for a report account.
+        Usage: trace <account> [as-of-date]
+
+        Shows what feeds into the account total, with amounts and sources.
+        Useful for understanding why a total shows a particular number.
+
+        Examples:
+          trace RE                      # All-time RE accumulation
+          trace RE 2025-05-31           # RE as of a specific date
+          trace NETEARN 2024-06-01 2025-05-31  # NETEARN for a date range
+        """
+        if not self._require_books():
+            return
+
+        parts = _split_args(arg)
+        if not parts:
+            print("  Usage: trace <account> [date_to | date_from date_to]")
+            return
+
+        acct_name = parts[0].upper()
+        date_from = None
+        date_to = None
+        if len(parts) == 2:
+            date_to = models.normalize_date(parts[1])
+        elif len(parts) >= 3:
+            date_from = models.normalize_date(parts[1])
+            date_to = models.normalize_date(parts[2])
+
+        result = models.trace_account(acct_name, date_from, date_to)
+
+        if result['display'] == 0 and not result['contributors']:
+            print(f"\n  {acct_name}: not found on any report or has no activity.")
+            return
+
+        nb = result['normal_balance']
+        period = ""
+        if date_from and date_to:
+            period = f" ({date_from} to {date_to})"
+        elif date_to:
+            period = f" (as of {date_to})"
+
+        print(f"\n  {acct_name} ({nb}-normal){period}")
+        print(f"  Display: {models.fmt_amount(result['display'])}")
+        if result['own_raw'] != 0:
+            sign = 1 if nb == 'D' else -1
+            print(f"  Own postings: {models.fmt_amount(result['own_raw'] * sign)}")
+
+        if result['feeds_into']:
+            print(f"  Feeds into: {', '.join(result['feeds_into'])}")
+
+        if result['contributors']:
+            print(f"\n  {'Account':<20s} {'Report':<6s} {'Own':>14s} {'+ Received':>14s} {'= Dumped':>14s}")
+            print(f"  {'─'*20} {'─'*6} {'─'*14} {'─'*14} {'─'*14}")
+            for c in result['contributors']:
+                sign = 1 if nb == 'D' else -1
+                own_d = models.fmt_amount(c['own_raw'] * sign) if c['own_raw'] else '—'
+                acc_d = models.fmt_amount(c['accumulated'] * sign) if c['accumulated'] else '—'
+                val_d = models.fmt_amount(c['display'])
+                print(f"  {c['name']:<20s} {c['report']:<6s} {own_d:>14s} {acc_d:>14s} {val_d:>14s}")
+
+            print(f"  {'─'*20} {'─'*6} {'─'*14} {'─'*14} {'─'*14}")
+            total_dumped = sum(c['value_dumped'] for c in result['contributors'])
+            sign = 1 if nb == 'D' else -1
+            print(f"  {'Total':<27s} {'':>14s} {'':>14s} {models.fmt_amount(total_dumped * sign):>14s}")
         print()
 
     # ─── YE rollover ───────────────────────────────────────────

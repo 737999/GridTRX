@@ -668,6 +668,113 @@ def compute_report_column(report_id, date_from=None, date_to=None,
         result.append((dict(it), raw * sign))
     return result
 
+
+def trace_account(account_name, date_from=None, date_to=None):
+    """Trace the full accumulation tree for a report account.
+
+    Returns a dict with:
+      name, normal_balance, own_raw, accumulated, merged, display,
+      contributors: [{name, own_raw, accumulated, value_dumped, display, targets, report}]
+
+    The contributors list shows every account that feeds into this one
+    (directly via total_to), with the amounts from the current accumulation pass.
+    """
+    all_items = get_all_report_items()
+    tt_fields = ['total_to_1','total_to_2','total_to_3','total_to_4','total_to_5']
+
+    bulk_bal = get_all_account_balances(date_from, date_to)
+    raw_bal = {}
+    seen = set()
+    for it in all_items:
+        if it['account_id'] and it['account_type'] == 'posting' and it['acct_name'] not in seen:
+            seen.add(it['acct_name'])
+            raw_bal[it['acct_name']] = bulk_bal.get(it['account_id'], 0)
+
+    acct_tt = {}
+    for it in all_items:
+        name = it['acct_name']
+        if not name:
+            continue
+        if name not in acct_tt:
+            acct_tt[name] = set()
+        for ttf in tt_fields:
+            target = it[ttf]
+            if target:
+                acct_tt[name].add(target)
+
+    # Multi-pass accumulation (same as compute_report_column)
+    accumulated = {}
+    for _pass in range(10):
+        prev = dict(accumulated)
+        accumulated = {}
+        for name, targets in acct_tt.items():
+            if not targets:
+                continue
+            val = raw_bal.get(name, 0) + prev.get(name, 0)
+            for target in targets:
+                accumulated[target] = accumulated.get(target, 0) + val
+        if accumulated == prev:
+            break
+
+    # Build normal_balance map and report map
+    nb_map = {}
+    report_map = {}
+    for it in all_items:
+        if it['acct_name']:
+            if it['normal_balance']:
+                nb_map[it['acct_name']] = it['normal_balance']
+            if it['acct_name'] not in report_map:
+                report_map[it['acct_name']] = it['report_id']
+
+    target_name = account_name.upper()
+    target_nb = nb_map.get(target_name, 'D')
+    sign = 1 if target_nb == 'D' else -1
+    own_raw = raw_bal.get(target_name, 0)
+    acc_into = accumulated.get(target_name, 0)
+    merged = own_raw + acc_into
+    display = merged * sign
+
+    # Find direct contributors: accounts whose total_to includes target_name
+    contributors = []
+    for name, targets in sorted(acct_tt.items()):
+        if target_name in targets:
+            c_own = raw_bal.get(name, 0)
+            c_acc = accumulated.get(name, 0)
+            c_val = c_own + c_acc  # value dumped into target
+            c_nb = nb_map.get(name, 'D')
+            c_sign = 1 if c_nb == 'D' else -1
+            # Get report name for this account
+            rpt_id = report_map.get(name)
+            rpt_name = ''
+            if rpt_id:
+                rpt = get_report(rpt_id)
+                if rpt:
+                    rpt_name = rpt['name']
+            contributors.append({
+                'name': name,
+                'normal_balance': c_nb,
+                'own_raw': c_own,
+                'accumulated': c_acc,
+                'value_dumped': c_val,
+                'display': c_val * sign,  # show in target's sign convention
+                'targets': sorted(targets),
+                'report': rpt_name,
+            })
+
+    return {
+        'name': target_name,
+        'normal_balance': target_nb,
+        'own_raw': own_raw,
+        'accumulated': acc_into,
+        'merged': merged,
+        'display': display,
+        'date_from': date_from,
+        'date_to': date_to,
+        'contributors': sorted(contributors, key=lambda c: abs(c['value_dumped']), reverse=True),
+        'feeds_into': sorted(acct_tt.get(target_name, set())),
+    }
+
+
 # ─── Trial Balance ────────────────────────────────────────────────
 def get_trial_balance(as_of_date=None):
     with get_db() as db:
@@ -919,13 +1026,24 @@ def import_rows(bank_account_id, rows):
         rows: list of dicts with keys: date, description, amount_cents, reference (optional)
 
     Returns:
-        dict with: rows_processed, posted, skipped, to_suspense, errors
+        dict with: rows_processed, posted, skipped, to_suspense, errors, possible_duplicates
     """
     posted = 0
     skipped = 0
     suspense = 0
     errors = []
+    possible_duplicates = []
     lock = get_meta('lock_date', '')
+
+    # Pre-scan for possible duplicates: existing transactions on the bank account
+    # with matching date + amount. Build a lookup set of (date, amount) pairs.
+    existing = set()
+    with get_db() as db:
+        for r in db.execute(
+                "SELECT t.date, l.amount FROM lines l "
+                "JOIN transactions t ON l.transaction_id = t.id "
+                "WHERE l.account_id = ?", (bank_account_id,)).fetchall():
+            existing.add((r['date'], r['amount']))
 
     for row_num, row in enumerate(rows, start=1):
         row_date = normalize_date(row['date'])
@@ -958,6 +1076,12 @@ def import_rows(bank_account_id, rows):
             errors.append({'row': row_num, 'reason': 'Zero amount'})
             skipped += 1
             continue
+
+        # Duplicate detection: check if this date+amount already exists on the bank account
+        if (row_date, amount_cents) in existing:
+            possible_duplicates.append({
+                'row': row_num, 'date': row_date,
+                'amount': amount_cents, 'description': row_desc[:60]})
 
         matched_acct, tax_code, tax_info = apply_rules(row_desc, amount_cents)
 
@@ -1005,6 +1129,8 @@ def import_rows(bank_account_id, rows):
                         row_date, reference, row_desc,
                         bank_account_id, target_acct['id'], abs(amount_cents))
             posted += 1
+            # Track for within-batch duplicate detection
+            existing.add((row_date, amount_cents))
         except ValueError as e:
             errors.append({'row': row_num, 'reason': str(e)})
             skipped += 1
@@ -1015,6 +1141,7 @@ def import_rows(bank_account_id, rows):
         'skipped': skipped,
         'to_suspense': suspense,
         'errors': errors[:20] if errors else [],
+        'possible_duplicates': possible_duplicates[:20] if possible_duplicates else [],
     }
     return result
 
@@ -1153,7 +1280,78 @@ def validate_report_chain():
             issues.append({'level': 'warning',
                 'message': "Cannot find TA (Total Assets) on BS to verify balance."})
 
-    # 5. Orphan total-to targets (referenced but not on any report)
+    # 5. BS RE vs IS RE.CLOSE cross-check
+    #    Computes both values for the current FY and flags any discrepancy.
+    #    This catches duplicate transactions, chain wiring mismatches, and
+    #    conversion artifacts — the single most valuable data-integrity check.
+    if bs_report and is_report and re_acct:
+        try:
+            # Determine current FY dates
+            fye_md = get_meta('fiscal_year_end', '')
+            fy_year = get_meta('fiscal_year', '')
+            if fye_md and fy_year:
+                fye_m, fye_d = int(fye_md.split('-')[0]), int(fye_md.split('-')[1])
+                fy_end = f"{fy_year}-{fye_m:02d}-{fye_d:02d}"
+                # FY start = day after previous FY end
+                if fye_m == 12 and fye_d == 31:
+                    fy_start = f"{int(fy_year)}-01-01"
+                else:
+                    from calendar import monthrange
+                    _, last = monthrange(2000, fye_m)
+                    if fye_d >= last:
+                        sm = fye_m + 1 if fye_m < 12 else 1
+                        sy = int(fy_year) if fye_m < 12 else int(fy_year)
+                        fy_start = f"{sy}-{sm:02d}-01"
+                    else:
+                        sy = int(fy_year) - 1 if fye_m < 12 or fye_d < 31 else int(fy_year)
+                        fy_start = f"{int(fy_year)-1}-{fye_m:02d}-{fye_d+1:02d}"
+                    # Simpler: FY start is 1 day after last year's FY end
+                    from datetime import date as _date, timedelta as _td
+                    prev_fy_end = _date(int(fy_year) - 1, fye_m, fye_d)
+                    fy_start = (prev_fy_end + _td(days=1)).isoformat()
+
+                # BS RE: all-time up to FY end
+                bs_data = compute_report_column(bs_report['id'], date_to=fy_end)
+                bs_re_val = None
+                for item, bal in bs_data:
+                    if item.get('acct_name') == 'RE':
+                        bs_re_val = bal
+                        break
+
+                # IS RE.CLOSE: for the FY period
+                is_data = compute_report_column(is_report['id'],
+                                                date_from=fy_start, date_to=fy_end)
+                is_reclose_val = None
+                # Try RE.CLOSE first, fall back to any account containing 'RE' at IS tail
+                for item, bal in is_data:
+                    if item.get('acct_name') == 'RE.CLOSE':
+                        is_reclose_val = bal
+                        break
+                if is_reclose_val is None:
+                    for item, bal in is_data:
+                        if item.get('acct_name') == 'RE':
+                            is_reclose_val = bal
+                            break
+
+                if bs_re_val is not None and is_reclose_val is not None:
+                    diff = bs_re_val - is_reclose_val
+                    if diff != 0:
+                        issues.append({'level': 'error',
+                            'message': f"BS Retained Earnings ({fmt_amount(bs_re_val)}) != "
+                                       f"IS Closing RE ({fmt_amount(is_reclose_val)}) "
+                                       f"for FY ending {fy_end}. "
+                                       f"Difference: {fmt_amount(diff)}. "
+                                       f"Check for duplicate transactions or chain wiring issues."})
+                elif bs_re_val is None:
+                    issues.append({'level': 'warning',
+                        'message': "Cannot find RE on BS to cross-check against IS."})
+                elif is_reclose_val is None:
+                    issues.append({'level': 'warning',
+                        'message': "Cannot find RE.CLOSE (or RE) on IS to cross-check against BS."})
+        except (ValueError, IndexError, TypeError):
+            pass  # FY dates not configured — skip this check
+
+    # 6. Orphan total-to targets (referenced but not on any report)
     on_report = set()
     for it in all_items:
         if it['acct_name']:
