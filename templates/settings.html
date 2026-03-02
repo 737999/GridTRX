@@ -16,6 +16,19 @@
     <input type="text" name="lock_date" value="{{ lock_date }}" placeholder="yyyy-mm-dd" style="font-family:var(--mono)">
     <p style="font-size:11.5px;color:var(--muted);margin-top:3px">No transactions on or before this date. Blank = no lock.</p></div>
 
+  <!-- CY Fiscal Ceiling + Roll Forward -->
+  <div style="margin-top:14px;padding:12px 14px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:6px;">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+      <div>
+        <label style="font-size:12px;font-weight:600;color:var(--muted);margin:0">CY Fiscal</label>
+        <div style="font-family:var(--mono);font-size:15px;font-weight:700;margin-top:2px">{{ fy_ceiling or '(not set)' }}</div>
+        <p style="font-size:11px;color:var(--muted);margin:2px 0 0">Posting window: {{ lock_date or '(open)' }} to {{ fy_ceiling or '?' }}</p>
+      </div>
+      <button type="button" class="btn" style="font-size:12px;white-space:nowrap"
+              onclick="doRollForward()">Roll Forward</button>
+    </div>
+  </div>
+
   <!-- F8/F9 GST Split Settings -->
   <div style="margin-top:20px;padding:12px 14px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:6px;">
     <h3 style="font-size:13px;font-weight:600;margin:0 0 10px;color:var(--accent)">F8 / F9 — Sales Tax Split</h3>
@@ -182,6 +195,21 @@
   function toggleDark(on) {
     document.documentElement.classList.toggle('dark', on);
     localStorage.setItem('grid-dark', on ? '1' : '0');
+  }
+  function doRollForward() {
+    const ceiling = '{{ fy_ceiling or "" }}';
+    if (!ceiling) { alert('No fiscal year ceiling set.'); return; }
+    if (!confirm('Roll forward fiscal year ending ' + ceiling + '?\n\n'
+        + 'This will:\n'
+        + '  - Post the closing RE offset entry\n'
+        + '  - Lock the current year (' + ceiling + ')\n'
+        + '  - Advance the ceiling to the next fiscal year\n\n'
+        + 'This cannot be undone.')) return;
+    const f = document.createElement('form');
+    f.method = 'POST'; f.action = '/settings/rollforward';
+    const inp = document.createElement('input');
+    inp.type = 'hidden'; inp.name = 'ye_date'; inp.value = ceiling;
+    f.appendChild(inp); document.body.appendChild(f); f.submit();
   }
 </script>
 {% endblock %}

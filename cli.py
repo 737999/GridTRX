@@ -1300,6 +1300,8 @@ class GridCLI(cmd.Cmd):
         print(f"    Rows processed: {result['rows_processed']}")
         print(f"    Posted:         {result['posted']}")
         print(f"    Skipped:        {result['skipped']}")
+        if result.get('fitid_skipped'):
+            print(f"    FITID dupes:    {result['fitid_skipped']} (skipped — already imported)")
         if result['to_suspense']:
             print(f"    To suspense:    {result['to_suspense']}")
 

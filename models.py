@@ -1035,15 +1035,22 @@ def import_rows(bank_account_id, rows):
     possible_duplicates = []
     lock = get_meta('lock_date', '')
 
-    # Pre-scan for possible duplicates: existing transactions on the bank account
-    # with matching date + amount. Build a lookup set of (date, amount) pairs.
+    # Pre-scan for possible duplicates: existing transactions on the bank account.
+    # Two detection methods:
+    #   1. FITID (reference) — deterministic for OFX imports. Same FITID = same txn.
+    #   2. Date + amount — soft match for CSV imports (warns but still posts).
     existing = set()
+    existing_refs = set()
+    fitid_skipped = 0
     with get_db() as db:
         for r in db.execute(
-                "SELECT t.date, l.amount FROM lines l "
+                "SELECT t.date, t.reference, l.amount FROM lines l "
                 "JOIN transactions t ON l.transaction_id = t.id "
                 "WHERE l.account_id = ?", (bank_account_id,)).fetchall():
             existing.add((r['date'], r['amount']))
+            ref = r['reference']
+            if ref and ref.strip():
+                existing_refs.add(ref.strip())
 
     for row_num, row in enumerate(rows, start=1):
         row_date = normalize_date(row['date'])
@@ -1077,7 +1084,14 @@ def import_rows(bank_account_id, rows):
             skipped += 1
             continue
 
-        # Duplicate detection: check if this date+amount already exists on the bank account
+        # FITID duplicate detection: if reference matches an existing transaction, skip entirely.
+        # FITID is a unique bank-assigned ID — same FITID = guaranteed duplicate.
+        if reference and reference.strip() and reference.strip() in existing_refs:
+            fitid_skipped += 1
+            skipped += 1
+            continue
+
+        # Soft duplicate detection: check if this date+amount already exists on the bank account
         if (row_date, amount_cents) in existing:
             possible_duplicates.append({
                 'row': row_num, 'date': row_date,
@@ -1131,6 +1145,8 @@ def import_rows(bank_account_id, rows):
             posted += 1
             # Track for within-batch duplicate detection
             existing.add((row_date, amount_cents))
+            if reference and reference.strip():
+                existing_refs.add(reference.strip())
         except ValueError as e:
             errors.append({'row': row_num, 'reason': str(e)})
             skipped += 1
@@ -1139,6 +1155,7 @@ def import_rows(bank_account_id, rows):
         'rows_processed': len(rows),
         'posted': posted,
         'skipped': skipped,
+        'fitid_skipped': fitid_skipped,
         'to_suspense': suspense,
         'errors': errors[:20] if errors else [],
         'possible_duplicates': possible_duplicates[:20] if possible_duplicates else [],

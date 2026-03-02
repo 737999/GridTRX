@@ -119,6 +119,11 @@
   {% if parent_report and parent_report.name == 'AJE' %}
   <button class="btn btn-sm" onclick="printAJE()">Print AJE</button>
   {% endif %}
+  {% if is_aje %}
+  <a href="?{% if parent_report %}from_report={{ parent_report.id }}&amp;{% endif %}{% if sort_by != 'description' %}sort=description{% endif %}"
+     class="btn btn-sm{% if sort_by == 'description' %} btn-primary{% endif %}"
+     style="font-size:11px;" title="Sort by description to group similar entries">{{ 'Date order' if sort_by == 'description' else 'Sort by Desc' }}</a>
+  {% endif %}
 </div>
 
 {% if windowed %}
@@ -141,7 +146,7 @@
       <th style="width:70px">Ref</th>
       <th>Description</th>
       <th class="r" style="width:90px">Amount</th>
-      <th class="r" style="width:100px">Balance</th>
+      <th class="r" style="width:100px">{% if sort_by == 'description' %}—{% else %}Balance{% endif %}</th>
       <th style="width:140px">Account</th>
     </tr>
   </thead>
@@ -159,7 +164,7 @@
     </tr>
     {% endif %}
     {% for e in entries %}
-    <tr id="txn-{{ e.txn_id }}" class="tr{% if parent_report and parent_report.name == 'AJE' and not loop.first and entries[loop.index0 - 1].reference != e.reference %} grp-break{% endif %}" data-tid="{{ e.txn_id }}" data-lid="{{ e.line_id }}" tabindex="0">
+    <tr id="txn-{{ e.txn_id }}" class="tr{% if parent_report and parent_report.name == 'AJE' and not loop.first %}{% if sort_by == 'description' %}{% if entries[loop.index0 - 1].description != e.description %} grp-break{% endif %}{% else %}{% if entries[loop.index0 - 1].reference != e.reference %} grp-break{% endif %}{% endif %}{% endif %}" data-tid="{{ e.txn_id }}" data-lid="{{ e.line_id }}" tabindex="0">
       <td>
         <form method="post" action="{{ url_for('reconcile', txn_id=e.txn_id) }}" style="display:inline">
           <input type="hidden" name="return_to" value="{{ request.url }}">
@@ -174,7 +179,7 @@
       <td class="editable" data-field="reference" data-val="{{ e.reference }}" style="font-size:11px">{{ e.reference }}</td>
       <td class="d editable" data-field="description" data-val="{{ e.description }}">{{ e.description }}</td>
       <td class="r {% if e.line_count <= 2 %}editable{% endif %}" data-field="amount" data-val="{{ e.amount }}" {% if e.line_count > 2 %}data-split="1"{% endif %}>{% if e.amount > 0 %}{{ e.amount|money }}{% elif e.amount < 0 %}({{ (-e.amount)|money }}){% else %}—{% endif %}</td>
-      <td class="r b">{{ e.running_balance|money }}</td>
+      <td class="r b">{% if sort_by == 'description' %}—{% else %}{{ e.running_balance|money }}{% endif %}</td>
       <td>{% if e.line_count > 2 %}<a href="{{ url_for('edit_transaction', txn_id=e.txn_id) }}?from_account={{ account.id }}{% if parent_report %}&amp;from_report={{ parent_report.id }}{% endif %}&amp;return_to={{ ('/ledger/' ~ account.id|string ~ '?from_report=' ~ (parent_report.id|string if parent_report else '') ~ '#txn-' ~ e.txn_id|string)|urlencode }}" class="xa split" title="Split — edit in transaction detail">–split–</a>{% elif e.cross_accounts %}<span class="xa editable" data-field="account" data-val="{{ e.cross_accounts }}" title="Click to edit account">{{ e.cross_accounts }}</span>{% endif %}</td>
     </tr>
     {% endfor %}

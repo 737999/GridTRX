@@ -982,11 +982,23 @@ def account_ledger(account_id):
     date_from = request.args.get('from', '')
     date_to = request.args.get('to', '')
     show_all = request.args.get('all', '')
+    sort_by = request.args.get('sort', '')  # 'description' for AJE sort
 
     # Fiscal-year-based default window (browser only — models layer unchanged)
     opening_balance = 0
     windowed = False
     prev_from = ''
+
+    # Determine parent report early — needed for AJE detection before windowing
+    from_report_id = request.args.get('from_report', '')
+    parent_report = None
+    if from_report_id:
+        parent_report = models.get_report(int(from_report_id))
+    if not parent_report:
+        parent_report = models.find_report_for_account(account_id)
+
+    # AJE accounts: skip pagination entirely — show all transactions by default
+    is_aje = parent_report and parent_report['name'] not in ('BS', 'IS')
 
     # Helper: compute FY start month/day from fiscal_year_end meta
     def _fy_start_md():
@@ -1005,7 +1017,7 @@ def account_ledger(account_id):
             return (fye_m + 1 if fye_m < 12 else 1), 1
         return fye_m, fye_d + 1
 
-    if not show_all:
+    if not show_all and not is_aje:
         if not date_from and not date_to:
             # Auto-window: show 2 fiscal years
             fy_start_m, fy_start_d = _fy_start_md()
@@ -1033,19 +1045,15 @@ def account_ledger(account_id):
 
     entries = models.get_ledger(account_id, date_from or None, date_to or None,
                                 opening_balance=opening_balance)
+
+    # AJE sort by description (display-only — doesn't affect DB order)
+    if is_aje and sort_by == 'description':
+        entries = sorted(entries, key=lambda e: (e.get('description', '') or '').lower())
+
     balance = models.get_account_balance(account_id)
     sign = 1 if account['normal_balance'] == 'D' else -1
     balance = balance * sign
     company = models.get_meta('company_name', 'My Books')
-
-    # Track parent report for breadcrumb navigation
-    # If from_report specified, use it; otherwise auto-detect from BS or IS
-    from_report_id = request.args.get('from_report', '')
-    parent_report = None
-    if from_report_id:
-        parent_report = models.get_report(int(from_report_id))
-    if not parent_report:
-        parent_report = models.find_report_for_account(account_id)
 
     # Default AJE ref prefix from fiscal year
     fy = models.get_meta('fiscal_year', '')
@@ -1056,7 +1064,8 @@ def account_ledger(account_id):
                          company=company, today=date.today().isoformat(),
                          parent_report=parent_report, default_prefix=default_prefix,
                          opening_balance=opening_balance, windowed=windowed,
-                         prev_from=prev_from, show_all=show_all)
+                         prev_from=prev_from, show_all=show_all,
+                         is_aje=is_aje, sort_by=sort_by)
 
 # ─── Cross-Account Jump ────────────────────────────────────────────
 
@@ -1513,13 +1522,31 @@ def settings():
     stripe_ar_report = models.get_meta('stripe_ar_report', '')
     accounts = models.get_accounts()
     reports = models.get_reports()
+    fy_ceiling = models.get_meta('fy_end_date', '')
     return render_template('settings.html', company=company, fye=fye, fy_year=fy_year,
                          lock_date=lock_date, db_path=db_path,
                          gst_rate_num=gst_rate_num, gst_rate_den=gst_rate_den,
                          f8_tax_acct=f8_tax_acct, f8_post_acct=f8_post_acct,
                          f9_tax_acct=f9_tax_acct, f9_post_acct=f9_post_acct,
                          stripe_fee_acct=stripe_fee_acct, stripe_ar_report=stripe_ar_report,
-                         accounts=accounts, reports=reports)
+                         accounts=accounts, reports=reports, fy_ceiling=fy_ceiling)
+
+@app.route('/settings/rollforward', methods=['POST'])
+def settings_rollforward():
+    if not models.get_db_path():
+        return redirect(url_for('library'))
+    ye_date = request.form.get('ye_date', '').strip()
+    if not ye_date:
+        flash('No year-end date provided', 'error')
+        return redirect(url_for('settings'))
+    try:
+        result = models.rollforward(ye_date)
+        flash(f"Roll forward complete. Closing RE: {result['closing_re']/100:,.2f}. "
+              f"Lock set to {result['lock_date']}. Ceiling advanced to {result['fy_end_date']}.",
+              'success')
+    except ValueError as e:
+        flash(f'Roll forward failed: {e}', 'error')
+    return redirect(url_for('settings'))
 
 # ─── CSV Import ──────────────────────────────────────────────────
 
