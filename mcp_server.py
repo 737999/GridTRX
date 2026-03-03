@@ -508,8 +508,13 @@ def bulk_report_layout(
         raise ValueError(f"Report not found: {report_name}")
     report_id = report["id"]
 
-    # Replace mode: wipe existing items
+    # Replace mode: save cross-report chain links before wiping
+    saved_chain = {}  # {account_name: total_to_1}
     if mode == "replace":
+        existing = models.get_report_items(report_id)
+        for item in existing:
+            if item["acct_name"] and item["total_to_1"]:
+                saved_chain[item["acct_name"]] = str(item["total_to_1"])
         models.clear_report_items(report_id)
 
     # Determine starting position
@@ -535,12 +540,29 @@ def bulk_report_layout(
     placed = 0
     skipped = 0
     errors = []
+    # Track which accounts the caller explicitly provided total_to for
+    caller_specified_tt = set()
+
+    def _resolve_total_to(val):
+        """Ensure total_to is always an account name string, never an integer ID."""
+        if not val:
+            return ""
+        val = str(val)
+        # If it looks like a bare integer, resolve it to an account name
+        if val.isdigit():
+            with models.get_db() as lookup_db:
+                row = lookup_db.execute(
+                    "SELECT name FROM accounts WHERE id=?", (int(val),)
+                ).fetchone()
+                if row:
+                    return row["name"]
+        return val
 
     with models.get_db() as db:
         for idx, spec in enumerate(items):
             item_type = spec.get("item_type", "account")
             indent = spec.get("indent", 2)
-            total_to_1 = spec.get("total_to", "")
+            total_to_1 = _resolve_total_to(spec.get("total_to", ""))
             description = spec.get("description", "")
             sep_style = spec.get("sep_style", "")
             account_name = spec.get("account_name", "")
@@ -574,6 +596,9 @@ def bulk_report_layout(
                 skipped += 1
                 continue
 
+            if total_to_1:
+                caller_specified_tt.add(account_name)
+
             db.execute(
                 "INSERT INTO report_items(report_id, position, item_type, description, "
                 "account_id, indent, total_to_1, sep_style) VALUES(?,?,?,?,?,?,?,?)",
@@ -581,6 +606,21 @@ def bulk_report_layout(
                  total_to_1, sep_style))
             position += 10
             placed += 1
+
+        # Restore cross-report chain links that the caller didn't explicitly provide.
+        # This prevents replace mode from silently breaking links like
+        # NETINC→NI or RE.CLOSE→RE that wire the IS to the BS.
+        if mode == "replace" and saved_chain:
+            for acct_name, old_tt in saved_chain.items():
+                if acct_name in caller_specified_tt:
+                    continue  # caller explicitly set this one, don't override
+                old_tt = _resolve_total_to(old_tt)
+                if old_tt:
+                    db.execute(
+                        "UPDATE report_items SET total_to_1=? "
+                        "WHERE report_id=? AND account_id=(SELECT id FROM accounts WHERE name=?) "
+                        "AND (total_to_1 IS NULL OR total_to_1='')",
+                        (old_tt, report_id, acct_name))
 
         # Resequence once at the end
         models._resequence(db, report_id)
