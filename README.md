@@ -1,5 +1,7 @@
 # GridTRX
 
+**[Watch the demo: Full accounting cycle in 15 minutes](https://youtu.be/9mmHbgEB3PQ)**
+
 **Built specifically for agent use as a double-entry, full-cycle accounting suite and reporting framework. You prompt in plain english -> agent completes the books correctly.**
 
 GridTRX is a bookkeeping system primarily built for AI agents first, and human accountants second. Feed it a bank statement or an Excel file, and the system produces a full set of auditable books: balance sheet, income statement, general ledger, trial balance. No subscriptions, no cloud, full privacy and security. Full GUI for humans, and CLI for agents.
