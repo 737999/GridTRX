@@ -363,13 +363,113 @@ def add_account(
     name: str,
     normal_balance: str,
     description: str = "",
+    report_name: str = "",
+    after_account: str = "",
+    total_to: str = "",
 ) -> dict:
-    """Add a new posting account. normal_balance is 'D' (debit-normal) or 'C' (credit-normal)."""
+    """Add a new posting account. normal_balance is 'D' (debit-normal) or 'C' (credit-normal).
+
+    Optionally place it on a report in the same call by providing report_name.
+    Use after_account and/or total_to to control positioning (see add_to_report).
+    """
     _init(db_path)
     if normal_balance not in ("D", "C"):
         raise ValueError("normal_balance must be 'D' or 'C'")
     account_id = models.add_account(name, normal_balance, description)
-    return {"account_id": account_id, "name": name}
+    result = {"account_id": account_id, "name": name}
+
+    if report_name:
+        placement = _place_on_report(report_name, name, after_account, total_to,
+                                     indent=2, description="")
+        result["report_item_id"] = placement["item_id"]
+        result["report"] = placement["report"]
+        result["position"] = placement["position"]
+
+    return result
+
+
+@mcp.tool()
+def add_to_report(
+    db_path: str,
+    report_name: str,
+    account_name: str,
+    after_account: str = "",
+    total_to: str = "",
+    indent: int = 2,
+    description: str = "",
+) -> dict:
+    """Place an existing account on a report (BS, IS, etc.).
+
+    Positioning (in priority order):
+      1. after_account — insert after this account on the report
+      2. total_to — insert after the last item that rolls up to this total
+      3. Neither — append to end of report
+
+    Args:
+        report_name: Report name ('BS', 'IS', etc.)
+        account_name: Account to place on the report
+        after_account: Insert after this account on the report
+        total_to: Account name this item rolls up into (sets total_to_1)
+        indent: Indentation level (default 2)
+        description: Override display text (default: uses account description)
+    """
+    _init(db_path)
+    return _place_on_report(report_name, account_name, after_account, total_to,
+                            indent, description)
+
+
+def _place_on_report(report_name, account_name, after_account, total_to,
+                     indent, description):
+    """Shared logic for placing an account on a report."""
+    report = models.find_report_by_name(report_name)
+    if not report:
+        raise ValueError(f"Report not found: {report_name}")
+
+    acct = models.get_account_by_name(account_name)
+    if not acct:
+        raise ValueError(f"Account not found: {account_name}")
+
+    report_id = report["id"]
+    items = models.get_report_items(report_id)
+    position = None
+    total_to_1 = total_to
+
+    if after_account:
+        # Find the after_account's position on this report
+        found = False
+        for item in items:
+            if item["acct_name"] == after_account:
+                position = item["position"] + 5
+                found = True
+                break
+        if not found:
+            raise ValueError(
+                f"after_account '{after_account}' not found on report {report_name}")
+    elif total_to:
+        # Verify total_to account exists
+        tt_acct = models.get_account_by_name(total_to)
+        if not tt_acct:
+            raise ValueError(f"total_to account not found: {total_to}")
+        # Find the last item whose total_to_1 matches
+        last_pos = None
+        for item in items:
+            if item["total_to_1"] == total_to:
+                last_pos = item["position"]
+        if last_pos is not None:
+            position = last_pos + 5
+        # else: fall through to append (position=None → add_report_item appends)
+
+    item_id = models.add_report_item(
+        report_id, "account", description, acct["id"],
+        indent=indent, position=position, total_to_1=total_to_1,
+    )
+
+    return {
+        "item_id": item_id,
+        "report": report_name,
+        "account": account_name,
+        "position": position or "appended",
+    }
 
 
 @mcp.tool()
