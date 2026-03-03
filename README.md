@@ -59,7 +59,7 @@ No clicking. No menus. No login. Just a conversation.
 
 ## Three Interfaces, One Engine
 
-**MCP Server (preferred for agents)** — Structured JSON tools for AI agents. 19 tools (12 read, 7 write) wrapping `models.py` directly. No text parsing, typed parameters, deterministic output.
+**MCP Server (preferred for agents)** — Structured JSON tools for AI agents. 20 tools (12 read, 8 write) wrapping `models.py` directly. No text parsing, typed parameters, deterministic output.
 
 **CLI (fallback for agents, power users)** — One-shot shell commands. Zero dependencies beyond Python 3.7+. Any terminal-based agent can drive it via subprocess. Humans can use it too.
 
@@ -69,11 +69,15 @@ All three hit the same `models.py` data layer. Nothing is out of sync. MCP and C
 
 ## Quick Start
 
-### MCP Server (for Claude Desktop / Claude Code)
+### Install dependencies
 
 ```bash
-pip install mcp
+pip install -r requirements.txt
 ```
+
+Or install individually: `pip install mcp` (MCP server), `pip install flask` (browser UI). The CLI has no dependencies beyond the Python 3.7+ standard library. **No packages are installed at runtime.**
+
+### MCP Server (for Claude Desktop / Claude Code)
 
 Add to `claude_desktop_config.json`:
 
@@ -153,7 +157,7 @@ python cli.py ~/clients/acme importcsv ~/downloads/jan2025.csv BANK.CHQ
 
 Full CLI reference: [CLI_README.txt](CLI_README.txt)
 
-## MCP Tools
+## MCP Tools (20)
 
 ### Read Tools
 | Tool | Purpose |
@@ -181,6 +185,8 @@ Full CLI reference: [CLI_README.txt](CLI_README.txt)
 | `import_ofx(db_path, ofx_path, bank_account)` | Import bank OFX/QBO |
 | `year_end(db_path, ye_date)` | Year-end rollover |
 | `set_lock_date(db_path, lock_date?)` | Show or set the lock date |
+| `add_to_report(db_path, report_name, account_name, ...)` | Place one account on a report |
+| `bulk_report_layout(db_path, report_name, items, ...)` | Batch-place items on a report |
 
 ## Display Format
 
@@ -239,7 +245,9 @@ See [SKILL.md](SKILL.md) for the full skill definition.
 
 **MCP Server:** Python 3.7+ and `pip install mcp`
 
-**Browser UI:** Python 3.7+ and Flask (`pip install flask`, or just run `run.py` and it installs automatically)
+**Browser UI:** Python 3.7+ and `pip install flask`
+
+All dependencies are declared in `requirements.txt`. Install before first use — nothing is installed at runtime.
 
 ## License
 
