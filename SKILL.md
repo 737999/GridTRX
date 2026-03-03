@@ -71,7 +71,7 @@ Runs one command, prints plain text to stdout, exits. When `GRIDTRX_WORKSPACE` i
 - **Double-entry:** Every transaction is a balanced zero-sum entry. Debits = Credits. Always.
 - **Sign convention:** Positive = Debit. Parentheses `(1,500.00)` = Credit. `—` = Zero.
 - **Amounts:** Stored as integer cents internally. Displayed as dollars with two decimals.
-- **Account names:** Case-insensitive, UPPER by convention. Common prefixes: `BANK.` `EX.` `REV.` `AR.` `AP.` `GST.` `RE.`
+- **Account names:** Case-insensitive, UPPER by convention. Common prefixes: `BANK.` `EX.` `REV.` `AR.` `AP.` `GST.` `RE.` `SHL.` — When importing a trial balance or creating accounts, ALWAYS use GridTRX naming. Never use numeric account codes. If the source data has numeric codes (1010, 5800, etc.), ignore the codes and map by description to the nearest GridTRX account name. If no match exists, create the account using the `EX.` or `REV.` prefix convention. Always call `list_accounts` first before creating anything.
 - **EX.SUSP (Suspense):** Where unrecognized transactions land. This is the triage queue. Tell the AI what the suspense items are and it will clear them. Or clear them yourself through the GUI.
 - **Import rules:** Keyword → account mappings. Case-insensitive match, highest priority wins. Optional tax code splits the amount into net + tax automatically.
 - **Lock date:** Prevents changes to closed periods. Check before importing historical data.
