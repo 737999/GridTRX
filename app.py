@@ -11,6 +11,11 @@ from datetime import datetime, date, timedelta
 from flask import (Flask, render_template, request, redirect, url_for, 
                    flash, jsonify, send_file, session)
 import models
+from pdf_reports import (
+    _setup_fonts, _fmt_money, _short_date,
+    _get_bs_account_ids, _get_report_account_order,
+    _build_account_detail, gl_pdf, aje_pdf, report_pdf,
+)
 
 
 app = Flask(__name__)
@@ -660,42 +665,16 @@ def _multicol_pdf(report, company, columns, row_data, mode, num_months):
     try:
         from reportlab.lib.pagesizes import letter
         from reportlab.pdfgen import canvas
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
     except ImportError:
         from flask import abort
         abort(500, 'reportlab not installed')
-    import io, os
-    
+    import io
+
     pw, ph = letter[1], letter[0]  # landscape
     margin = 36  # 0.5"
-    
-    # Font setup (same as GL PDF)
-    font = 'Courier'
-    font_b = 'Courier-Bold'
-    candidates = [
-        ('LiberationMono', '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-                           '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf'),
-        ('DejaVuMono',     '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
-                           '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'),
-        ('Consolas',       'C:/Windows/Fonts/consola.ttf',
-                           'C:/Windows/Fonts/consolab.ttf'),
-        ('CourierNew',     'C:/Windows/Fonts/cour.ttf',
-                           'C:/Windows/Fonts/courbd.ttf'),
-        ('Menlo',          '/System/Library/Fonts/Menlo.ttc',
-                           '/System/Library/Fonts/Menlo.ttc'),
-    ]
-    for fname, reg_path, bold_path in candidates:
-        if os.path.exists(reg_path):
-            try:
-                pdfmetrics.registerFont(TTFont(fname, reg_path))
-                pdfmetrics.registerFont(TTFont(fname + '-Bold', bold_path))
-                font = fname
-                font_b = fname + '-Bold'
-            except:
-                pass
-            break
-    
+
+    font, font_b = _setup_fonts()
+
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(pw, ph))
     
@@ -3269,109 +3248,9 @@ def reports_page():
         fy_end=fy_end_date.strftime('%Y-%m-%d'))
 
 
-def _get_bs_account_ids():
-    """Return set of account_ids that appear in BS report."""
-    reports = models.get_reports()
-    bs = next((r for r in reports if r['name'] == 'BS'), None)
-    if not bs:
-        return set()
-    items = models.get_report_items(bs['id'])
-    return {i['account_id'] for i in items if i['account_id']}
 
-
-def _get_report_account_order(report_name):
-    """Return ordered list of (account_id, acct_name, acct_desc) from a report's items."""
-    reports = models.get_reports()
-    rpt = next((r for r in reports if r['name'] == report_name), None)
-    if not rpt:
-        return []
-    items = models.get_report_items(rpt['id'])
-    seen = set()
-    result = []
-    for item in items:
-        aid = item['account_id']
-        atype = item['account_type'] or ''
-        if aid and aid not in seen and atype == 'posting':
-            seen.add(aid)
-            result.append((aid, item['acct_name'] or '', item['acct_desc'] or ''))
-    return result
-
-
-def _build_account_detail(account_id, acct_name, acct_desc, begin, end, is_bs, dr_cr_filter='all'):
-    """Build GL detail rows for one account.
-    Returns list of dicts: {type, date, ref, desc, debit, credit, balance}
-    Debits positive, credits negative. No normal-balance flipping.
-    """
-    rows = []
-    
-    # Opening balance
-    if is_bs:
-        # Sum all transactions up to day before begin
-        from datetime import datetime, timedelta
-        if begin:
-            d = datetime.strptime(begin, '%Y-%m-%d') - timedelta(days=1)
-            opening = models.get_account_balance(account_id, date_to=d.strftime('%Y-%m-%d'))
-        else:
-            opening = 0
-    else:
-        opening = 0
-    
-    # Get transactions in period
-    with models.get_db() as db:
-        sql = """
-            SELECT t.id as txn_id, t.date, t.reference, t.description as txn_desc,
-                   l.amount, l.description as line_desc, l.id as line_id,
-                   GROUP_CONCAT(DISTINCT a2.name) as cross_accounts
-            FROM lines l
-            JOIN transactions t ON l.transaction_id = t.id
-            LEFT JOIN lines l2 ON l2.transaction_id = t.id AND l2.account_id != ?
-            LEFT JOIN accounts a2 ON l2.account_id = a2.id
-            WHERE l.account_id = ?"""
-        params = [account_id, account_id]
-        if begin: sql += " AND t.date >= ?"; params.append(begin)
-        if end: sql += " AND t.date <= ?"; params.append(end)
-        sql += " GROUP BY l.id ORDER BY t.date, t.id, l.sort_order"
-        txns = db.execute(sql, params).fetchall()
-    
-    balance = opening
-    
-    for txn in txns:
-        amt = txn['amount']  # positive = debit, negative = credit
-        debit = amt if amt > 0 else 0
-        credit = -amt if amt < 0 else 0
-        
-        if dr_cr_filter == 'debit' and amt <= 0:
-            continue
-        if dr_cr_filter == 'credit' and amt >= 0:
-            continue
-        
-        balance += amt
-        cross_raw = txn['cross_accounts'] or ''
-        cross = '-split-' if ',' in cross_raw else cross_raw
-        
-        rows.append({
-            'type': 'txn',
-            'date': txn['date'],
-            'ref': txn['reference'] or '',
-            'desc': txn['line_desc'] or txn['txn_desc'] or '',
-            'debit': debit,
-            'credit': credit,
-            'balance': balance,
-            'cross': cross,
-        })
-    
-    closing = balance
-    return opening, rows, closing
-
-
-def _fmt_money(cents):
-    """Format cents as dollar string. No normal-balance. Debits positive."""
-    if cents == 0:
-        return '—'
-    neg = cents < 0
-    val = abs(cents) / 100.0
-    s = f'{val:,.2f}'
-    return f'({s})' if neg else s
+# _get_bs_account_ids, _get_report_account_order, _build_account_detail, _fmt_money
+# imported from pdf_reports
 
 
 @app.route('/reports/gl')
@@ -3438,180 +3317,9 @@ def _gl_csv(accounts, bs_ids, begin, end, dr_cr_filter, company):
 
 
 def _gl_pdf(accounts, bs_ids, begin, end, dr_cr_filter, company):
-    """Generate GL as monospaced PDF."""
-    try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-    except ImportError:
-        from flask import abort
-        abort(500, 'reportlab not installed. Run: pip install reportlab')
-    import io, os
-    
-    # Try monospaced fonts in preference order, use Courier as final fallback
-    font = 'Courier'
-    font_b = 'Courier-Bold'
-    candidates = [
-        # (reg_name, regular_path, bold_path) — checked in order
-        # Linux
-        ('LiberationMono', '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-                           '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf'),
-        ('DejaVuMono',     '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
-                           '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'),
-        # Windows 10+
-        ('Consolas',       'C:/Windows/Fonts/consola.ttf',
-                           'C:/Windows/Fonts/consolab.ttf'),
-        # Windows 7+
-        ('CourierNew',     'C:/Windows/Fonts/cour.ttf',
-                           'C:/Windows/Fonts/courbd.ttf'),
-        # macOS
-        ('Menlo',          '/System/Library/Fonts/Menlo.ttc',
-                           '/System/Library/Fonts/Menlo.ttc'),
-    ]
-    for name, regular, bold in candidates:
-        if os.path.exists(regular) and os.path.exists(bold):
-            try:
-                # Only register if not already registered
-                try: pdfmetrics.getFont(name)
-                except KeyError:
-                    pdfmetrics.registerFont(TTFont(name, regular))
-                    pdfmetrics.registerFont(TTFont(name+'-Bold', bold))
-                font = name
-                font_b = name + '-Bold'
-                break
-            except Exception:
-                continue
-    
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    pw, ph = letter  # 612, 792
-    margin = 36  # 0.5 inch all sides
-    usable_w = pw - 2 * margin
-    
-    fs = 6.5  # tighter font for more description space
-    line_h = 8.5
-    
-    # Column layout within 0.5" margins (usable = 540pt)
-    # Tightened: date 40pt, ref 26pt, then desc gets the rest up to debit
-    col_date = margin
-    col_ref = margin + 40
-    col_desc = margin + 66
-    col_debit = margin + 310
-    col_credit = margin + 375
-    col_balance = margin + 440
-    col_cross = margin + 510
-    right_edge = pw - margin
-    desc_max = 62  # chars that fit between col_desc and col_debit at 6.5pt
-    
-    y = ph - margin
-    page_num = 1
-    
-    def short_date(d):
-        """Format date as dd-Mon-yy"""
-        if not d: return ''
-        from datetime import datetime
-        try:
-            dt = datetime.strptime(d[:10], '%Y-%m-%d')
-            return dt.strftime('%d-%b-%y')
-        except: return d[:10]
-    
-    begin_s = short_date(begin) if begin else 'Start'
-    end_s = short_date(end) if end else 'Current'
-    
-    def header():
-        nonlocal y
-        c.setFont(font_b, 8)
-        c.drawString(margin, ph - margin + 5, f'{company} — General Ledger')
-        c.setFont(font, 6)
-        c.drawString(margin, ph - margin - 4, f'{begin_s} to {end_s}')
-        c.drawRightString(right_edge, ph - margin + 5, f'Page {page_num}')
-        y = ph - margin - 12
-    
-    def col_header():
-        nonlocal y
-        c.setFont(font_b, fs)
-        c.drawString(col_date, y, 'Date')
-        c.drawString(col_ref, y, 'Ref')
-        c.drawString(col_desc, y, 'Description')
-        c.drawRightString(col_debit + 58, y, 'Debit')
-        c.drawRightString(col_credit + 58, y, 'Credit')
-        c.drawRightString(col_balance + 58, y, 'Balance')
-        c.drawString(col_cross, y, 'Acct')
-        y -= 2
-        c.setLineWidth(0.4)
-        c.line(margin, y, right_edge, y)
-        y -= line_h
-    
-    def check_page(need=2):
-        nonlocal y, page_num
-        if y < margin + need * line_h:
-            c.showPage()
-            page_num += 1
-            header()
-            col_header()
-    
-    def draw_row(date_s, ref_s, desc_s, debit, credit, balance, cross='', bold=False):
-        nonlocal y
-        check_page()
-        fn = font_b if bold else font
-        c.setFont(fn, fs)
-        c.drawString(col_date, y, date_s)
-        c.drawString(col_ref, y, (ref_s or '')[:6])
-        c.drawString(col_desc, y, (desc_s or '')[:desc_max])
-        if debit: c.drawRightString(col_debit + 58, y, _fmt_money(debit))
-        # Credits always in brackets
-        if credit: c.drawRightString(col_credit + 58, y, _fmt_money(-credit))
-        if balance is not None: c.drawRightString(col_balance + 58, y, _fmt_money(balance))
-        if cross: c.drawString(col_cross, y, cross[:12])
-        y -= line_h
-    
-    header()
-    
-    for idx, (aid, aname, adesc) in enumerate(accounts):
-        is_bs = aid in bs_ids
-        opening, rows, closing = _build_account_detail(aid, aname, adesc, begin, end, is_bs, dr_cr_filter)
-        
-        if not rows and opening == 0:
-            continue
-        
-        check_page(5)
-        
-        # Account header
-        c.setFont(font_b, 8)
-        c.drawString(margin, y, f'{aname}  {adesc}')
-        y -= line_h
-        col_header()
-        
-        # Opening balance — only in balance column
-        draw_row(begin_s, '', 'Opening Balance', 0, 0, opening, bold=True)
-        
-        # Transaction rows — debit positive, credit in brackets, always
-        total_dr, total_cr = 0, 0
-        for r in rows:
-            total_dr += r['debit']
-            total_cr += r['credit']
-            draw_row(short_date(r['date']), r['ref'], r['desc'],
-                     r['debit'], r['credit'], r['balance'], r['cross'])
-        
-        # Single underline before closing
-        check_page()
-        c.setLineWidth(0.3)
-        c.line(col_debit, y + line_h - 2, col_balance + 68, y + line_h - 2)
-        
-        # Closing line: debit/credit show TOTALS, balance shows closing balance
-        draw_row(end_s, '', 'Closing Balance', total_dr, total_cr, closing, bold=True)
-        
-        # Double underline on balance column
-        c.setLineWidth(0.4)
-        c.line(col_balance, y + line_h - 2, col_balance + 68, y + line_h - 2)
-        c.line(col_balance, y + line_h - 5, col_balance + 68, y + line_h - 5)
-        y -= line_h * 0.5  # half-line gap between accounts
-    
-    c.save()
-    buf.seek(0)
-    
-    resp = app.make_response(buf.read())
+    """Generate GL as monospaced PDF — delegates to pdf_reports.gl_pdf."""
+    pdf_bytes = gl_pdf(company, accounts, bs_ids, begin, end, dr_cr_filter)
+    resp = app.make_response(pdf_bytes)
     resp.headers['Content-Type'] = 'application/pdf'
     resp.headers['Content-Disposition'] = f'inline; filename=GL_{begin}_{end}.pdf'
     return resp
@@ -3692,168 +3400,11 @@ def report_aje(account_id):
 
 
 def _aje_pdf(account_id, acct, begin, end, company):
-    """Generate AJE report for one account as PDF, grouped by reference.
-    Lines: [ref] [date] [description] [amount] [account code]
-    """
-    try:
-        from reportlab.lib.pagesizes import letter
-        from reportlab.pdfgen import canvas
-        from reportlab.pdfbase import pdfmetrics
-        from reportlab.pdfbase.ttfonts import TTFont
-    except ImportError:
-        from flask import abort
-        abort(500, 'reportlab not installed. Run: pip install reportlab')
-    import io, os
-    from collections import OrderedDict
-
-    # Font cascade — same as _gl_pdf
-    font = 'Courier'
-    font_b = 'Courier-Bold'
-    candidates = [
-        ('LiberationMono', '/usr/share/fonts/truetype/liberation/LiberationMono-Regular.ttf',
-                           '/usr/share/fonts/truetype/liberation/LiberationMono-Bold.ttf'),
-        ('DejaVuMono',     '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
-                           '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'),
-        ('Consolas',       'C:/Windows/Fonts/consola.ttf',
-                           'C:/Windows/Fonts/consolab.ttf'),
-        ('CourierNew',     'C:/Windows/Fonts/cour.ttf',
-                           'C:/Windows/Fonts/courbd.ttf'),
-        ('Menlo',          '/System/Library/Fonts/Menlo.ttc',
-                           '/System/Library/Fonts/Menlo.ttc'),
-    ]
-    for name, regular, bold in candidates:
-        if os.path.exists(regular) and os.path.exists(bold):
-            try:
-                try: pdfmetrics.getFont(name)
-                except KeyError:
-                    pdfmetrics.registerFont(TTFont(name, regular))
-                    pdfmetrics.registerFont(TTFont(name+'-Bold', bold))
-                font = name
-                font_b = name + '-Bold'
-                break
-            except Exception:
-                continue
-
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    pw, ph = letter  # 612, 792
-    margin = 36
-    right_edge = pw - margin
-
-    fs = 7
-    line_h = 9
-
-    # Columns: ref | date | description | amount | account
-    col_ref = margin
-    col_date = margin + 68
-    col_desc = margin + 130
-    amt_r = right_edge - 68     # right edge of amount
-    col_acct = right_edge - 60  # account code
-
-    y = ph - margin
-    page_num = 1
-
+    """Generate AJE report as PDF — delegates to pdf_reports.aje_pdf."""
     acct_name = acct['name']
     acct_desc = acct['description'] or ''
-
-    def short_date(d):
-        if not d: return ''
-        try:
-            dt = datetime.strptime(d[:10], '%Y-%m-%d')
-            return dt.strftime('%d-%b-%y')
-        except Exception:
-            return d[:10]
-
-    begin_s = short_date(begin) if begin else 'Start'
-    end_s = short_date(end) if end else 'Current'
-
-    def page_header():
-        nonlocal y
-        c.setFont(font_b, 9)
-        c.drawString(margin, ph - margin + 5, company)
-        c.setFont(font_b, 8)
-        c.drawString(margin, ph - margin - 6, f'{acct_name} — {acct_desc}')
-        c.setFont(font, 6.5)
-        c.drawString(margin, ph - margin - 15, f'{begin_s} to {end_s}')
-        c.drawRightString(right_edge, ph - margin + 5, f'Page {page_num}')
-        y = ph - margin - 24
-
-    def col_headers():
-        nonlocal y
-        c.setFont(font_b, fs)
-        c.drawString(col_ref, y, 'Ref')
-        c.drawString(col_date, y, 'Date')
-        c.drawString(col_desc, y, 'Description')
-        c.drawRightString(amt_r, y, 'Amount')
-        c.drawString(col_acct, y, 'Account')
-        y -= 2
-        c.setLineWidth(0.4)
-        c.line(margin, y, right_edge, y)
-        y -= line_h
-
-    def check_page(need=2):
-        nonlocal y, page_num
-        if y < margin + need * line_h:
-            c.showPage()
-            page_num += 1
-            page_header()
-            col_headers()
-
-    # ── Query: all transaction lines touching this account ────────
-    with models.get_db() as db:
-        sql = """
-            SELECT t.id as txn_id, t.date, t.reference, t.description as txn_desc,
-                   l.amount, l.description as line_desc,
-                   GROUP_CONCAT(DISTINCT a2.name) as cross_accounts
-            FROM lines l
-            JOIN transactions t ON l.transaction_id = t.id
-            LEFT JOIN lines l2 ON l2.transaction_id = t.id AND l2.account_id != ?
-            LEFT JOIN accounts a2 ON l2.account_id = a2.id
-            WHERE l.account_id = ?
-        """
-        params = [account_id, account_id]
-        if begin: sql += " AND t.date >= ?"; params.append(begin)
-        if end: sql += " AND t.date <= ?"; params.append(end)
-        sql += " GROUP BY l.id ORDER BY t.reference, t.date, t.id, l.sort_order"
-        rows = db.execute(sql, params).fetchall()
-
-    # Group by reference
-    groups = OrderedDict()
-    for row in rows:
-        ref = row['reference'] or '(no ref)'
-        if ref not in groups:
-            groups[ref] = []
-        groups[ref].append(row)
-
-    # ── Draw PDF ──────────────────────────────────────────────────
-    page_header()
-    col_headers()
-
-    group_keys = list(groups.keys())
-    for gi, ref in enumerate(group_keys):
-        lines = groups[ref]
-        check_page(min(len(lines) + 1, 5))
-
-        for row in lines:
-            check_page()
-            c.setFont(font, fs)
-            c.drawString(col_ref, y, (row['reference'] or '')[:10])
-            c.drawString(col_date, y, short_date(row['date']))
-            c.drawString(col_desc, y, (row['line_desc'] or row['txn_desc'] or '')[:42])
-            c.drawRightString(amt_r, y, _fmt_money(row['amount']))
-            cross = row['cross_accounts'] or ''
-            cross = '-split-' if ',' in cross else cross
-            c.drawString(col_acct, y, cross[:10])
-            y -= line_h
-
-        # 2 blank lines between groups
-        if gi < len(group_keys) - 1:
-            y -= line_h * 2
-
-    c.save()
-    buf.seek(0)
-
-    resp = app.make_response(buf.read())
+    pdf_bytes = aje_pdf(company, account_id, acct_name, acct_desc, begin, end)
+    resp = app.make_response(pdf_bytes)
     resp.headers['Content-Type'] = 'application/pdf'
     fname = f'{acct_name}_{begin}_{end}.pdf' if begin and end else f'{acct_name}.pdf'
     resp.headers['Content-Disposition'] = f'inline; filename={fname}'

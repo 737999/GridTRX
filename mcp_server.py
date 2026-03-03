@@ -1132,5 +1132,156 @@ def _normalize_csv(rows_raw):
     return has_header, data_rows, repairs
 
 
+# ═══════════════════════════════════════════════════════════════════
+# EXPORT / PDF TOOLS
+# ═══════════════════════════════════════════════════════════════════
+
+@mcp.tool()
+def export_report_pdf(db_path: str, report_name: str, output_path: str,
+                      date_from: str = "", date_to: str = "",
+                      compare_date_from: str = "", compare_date_to: str = "",
+                      hide_zero: bool = False) -> dict:
+    """Export a report (BS, IS, etc.) to PDF. Optionally comparative with $chg and %chg."""
+    import pdf_reports
+
+    _init(db_path)
+    resolved = _check_path(output_path, "output_path")
+    report = models.find_report_by_name(report_name)
+    if not report:
+        raise ValueError(f"Report not found: {report_name}")
+    company = models.get_meta("company_name", "My Books")
+
+    items = models.get_report_items(report["id"])
+    all_items = models.get_all_report_items()
+
+    df = _normalize_date(date_from) if date_from else None
+    dt = _normalize_date(date_to) if date_to else None
+
+    # Current period column
+    cur_data = models.compute_report_column(
+        report["id"], date_from=df, date_to=dt,
+        _display_items=items, _all_items=all_items)
+
+    columns = [{"type": "actual", "label": dt or "Current", "data": cur_data}]
+
+    # Comparative column (if requested)
+    if compare_date_to:
+        cdf = _normalize_date(compare_date_from) if compare_date_from else None
+        cdt = _normalize_date(compare_date_to)
+        prior_data = models.compute_report_column(
+            report["id"], date_from=cdf, date_to=cdt,
+            _display_items=items, _all_items=all_items)
+        columns.insert(0, {"type": "actual", "label": cdt, "data": prior_data})
+
+        # $chg column
+        change_data = []
+        for j in range(len(prior_data)):
+            item_p, bal_p = prior_data[j]
+            _, bal_c = cur_data[j] if j < len(cur_data) else (None, 0)
+            change_data.append((item_p, bal_c - bal_p))
+        columns.append({"type": "change", "label": "$ chg", "data": change_data})
+
+        # %chg column
+        pct_data = []
+        for j in range(len(prior_data)):
+            item_p, bal_p = prior_data[j]
+            _, bal_c = cur_data[j] if j < len(cur_data) else (None, 0)
+            if bal_p != 0:
+                pct = round((bal_c - bal_p) * 10000 / abs(bal_p))
+            else:
+                pct = 0
+            pct_data.append((item_p, pct))
+        columns.append({"type": "pct_change", "label": "% chg", "data": pct_data})
+
+    # Build rows
+    base_items = columns[0]["data"]
+    rows = []
+    for idx, (item, _) in enumerate(base_items):
+        bals = []
+        for col in columns:
+            if col.get("data") and idx < len(col["data"]):
+                bals.append(col["data"][idx][1])
+            else:
+                bals.append(0)
+        if hide_zero and item.get("item_type") in ("account",) and all(b == 0 for b in bals):
+            continue
+        rows.append((item, bals))
+
+    col_labels = [c["label"] for c in columns]
+    col_types = [c["type"] for c in columns]
+
+    pdf_bytes = pdf_reports.report_pdf(company, report_name, col_labels, col_types, rows, hide_zero)
+    os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+    with open(resolved, "wb") as f:
+        f.write(pdf_bytes)
+
+    return {
+        "output_path": resolved,
+        "bytes": len(pdf_bytes),
+        "rows": len(rows),
+        "columns": col_labels,
+    }
+
+
+@mcp.tool()
+def export_gl_pdf(db_path: str, output_path: str,
+                  date_from: str = "", date_to: str = "",
+                  dr_cr_filter: str = "all") -> dict:
+    """Export the full General Ledger to PDF."""
+    import pdf_reports
+
+    _init(db_path)
+    resolved = _check_path(output_path, "output_path")
+    company = models.get_meta("company_name", "My Books")
+
+    accounts = (pdf_reports._get_report_account_order("BS")
+                + pdf_reports._get_report_account_order("IS"))
+    bs_ids = pdf_reports._get_bs_account_ids()
+
+    df = _normalize_date(date_from) if date_from else ""
+    dt = _normalize_date(date_to) if date_to else ""
+
+    pdf_bytes = pdf_reports.gl_pdf(company, accounts, bs_ids, df, dt, dr_cr_filter)
+    os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+    with open(resolved, "wb") as f:
+        f.write(pdf_bytes)
+
+    return {
+        "output_path": resolved,
+        "bytes": len(pdf_bytes),
+        "accounts": len(accounts),
+    }
+
+
+@mcp.tool()
+def export_aje_pdf(db_path: str, account_name: str, output_path: str,
+                   date_from: str = "", date_to: str = "") -> dict:
+    """Export an Adjusting Journal Entry report for one account to PDF."""
+    import pdf_reports
+
+    _init(db_path)
+    resolved = _check_path(output_path, "output_path")
+    company = models.get_meta("company_name", "My Books")
+
+    acct = models.get_account_by_name(account_name)
+    if not acct:
+        raise ValueError(f"Account not found: {account_name}")
+
+    df = _normalize_date(date_from) if date_from else ""
+    dt = _normalize_date(date_to) if date_to else ""
+
+    pdf_bytes = pdf_reports.aje_pdf(company, acct["id"], acct["name"],
+                                    acct["description"] or "", df, dt)
+    os.makedirs(os.path.dirname(resolved) or ".", exist_ok=True)
+    with open(resolved, "wb") as f:
+        f.write(pdf_bytes)
+
+    return {
+        "output_path": resolved,
+        "bytes": len(pdf_bytes),
+        "account": acct["name"],
+    }
+
+
 if __name__ == "__main__":
     mcp.run()
