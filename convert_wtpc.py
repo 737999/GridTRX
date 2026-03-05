@@ -517,6 +517,14 @@ def import_datae(datae_path, acct_map):
     
     missing = all_txn_accts - set(acct_map.keys())
     for name in sorted(missing):
+        # Detect AJE/TRX journal accounts (e.g. 25AJE, 24TRX)
+        if re.match(r'\d{2}AJE', name):
+            acct_map[name] = models.ensure_journal_account(name, 'AJE')
+            continue
+        elif re.match(r'\d{2}TRX', name):
+            acct_map[name] = models.ensure_journal_account(name, 'TRX')
+            continue
+
         # Guess normal balance from name prefix
         if name.startswith('R.'):
             nb, desc = 'C', f'Revenue Client - {name}'
@@ -531,7 +539,7 @@ def import_datae(datae_path, acct_map):
         else:
             nb, desc = 'D', name
         acct_map[name] = models.add_account(name, nb, desc)
-    
+
     if missing:
         print(f"Auto-created {len(missing)} missing accounts: {sorted(missing)[:10]}...")
     

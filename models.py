@@ -2266,13 +2266,46 @@ def auto_match_accounts(csw_accounts):
     return suggestions
 
 
-def import_aje_entries(entries, account_map, ref_prefix):
-    """Post parsed AJE entries as transactions.
+def ensure_journal_account(name, report_name):
+    """Ensure a journal account exists and is on the given report.
+    Creates the account (C-normal, posting) and places it if needed.
+    Returns account_id.
+    """
+    acct = get_account_by_name(name)
+    if acct:
+        acct_id = acct['id']
+    else:
+        acct_id = add_account(name, 'C', f'Journal - {name}', 'posting')
+
+    # Check if already on the report
+    reports = get_reports()
+    report = None
+    for r in reports:
+        if r['name'] == report_name:
+            report = r
+            break
+    if report:
+        items = get_report_items(report['id'])
+        already_on = any(item['account_id'] == acct_id for item in items)
+        if not already_on:
+            add_report_item(report['id'], 'account', '', acct_id, indent=2)
+
+    return acct_id
+
+
+def import_aje_entries(entries, account_map, ref_prefix, journal_account=None):
+    """Post parsed AJE entries as transactions, routing through a journal account.
+
+    Each CaseWare AJE with N lines becomes N separate 2-line transactions:
+    one line to the real account, one to the journal account (opposite sign).
+    The journal account nets to zero but shows every entry in one ledger.
 
     Args:
         entries: list from parse_csw_aje()['entries']
         account_map: {csw_account_name: grid_account_id}
         ref_prefix: e.g. '25AJE'
+        journal_account: name of journal account (e.g. '25AJE'). If provided,
+            routes all legs through this account. If None, posts as compound txns.
 
     Returns:
         dict: {posted: int, skipped: int, errors: list}
@@ -2280,6 +2313,11 @@ def import_aje_entries(entries, account_map, ref_prefix):
     posted = 0
     skipped = 0
     errors = []
+
+    # Set up journal account if requested
+    journal_acct_id = None
+    if journal_account:
+        journal_acct_id = ensure_journal_account(journal_account, 'AJE')
 
     for i, entry in enumerate(entries):
         ref = f"{ref_prefix}{entry['num']}"
@@ -2309,7 +2347,16 @@ def import_aje_entries(entries, account_map, ref_prefix):
             continue
 
         try:
-            add_transaction(entry_date, ref, desc, txn_lines)
+            if journal_acct_id:
+                # Route each leg through the journal account as separate 2-line txns
+                for acct_id, amount_cents, line_desc in txn_lines:
+                    add_transaction(entry_date, ref, desc, [
+                        (acct_id, amount_cents, line_desc),
+                        (journal_acct_id, -amount_cents, line_desc),
+                    ])
+            else:
+                # Legacy: post as one compound transaction
+                add_transaction(entry_date, ref, desc, txn_lines)
             posted += 1
         except ValueError as e:
             errors.append({'entry': ref, 'reason': str(e)})

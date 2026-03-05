@@ -1443,7 +1443,7 @@ class GridCLI(cmd.Cmd):
             return
 
         # Post entries
-        result = models.import_aje_entries(parsed['entries'], account_map, ref_prefix)
+        result = models.import_aje_entries(parsed['entries'], account_map, ref_prefix, journal_account=ref_prefix)
 
         print(f"\n  Import complete:")
         print(f"    Posted:   {result['posted']}")

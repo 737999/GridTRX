@@ -2656,7 +2656,7 @@ def api_import_csw_aje():
         for csw_name, acct_id in account_map.items():
             int_map[csw_name] = int(acct_id)
 
-        result = models.import_aje_entries(parsed['entries'], int_map, ref_prefix)
+        result = models.import_aje_entries(parsed['entries'], int_map, ref_prefix, journal_account=ref_prefix)
 
         # Clean up cache
         try:
