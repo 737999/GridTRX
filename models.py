@@ -784,6 +784,15 @@ def trace_account(account_name, date_from=None, date_to=None):
 def get_trial_balance(as_of_date=None):
     with get_db() as db:
         accounts = db.execute("SELECT * FROM accounts WHERE account_type='posting' ORDER BY name").fetchall()
+        # Build map of account_id -> report names
+        report_map = {}
+        rows = db.execute("""
+            SELECT ri.account_id, GROUP_CONCAT(DISTINCT r.name) as report_names
+            FROM report_items ri JOIN reports r ON ri.report_id = r.id
+            WHERE ri.account_id IS NOT NULL
+            GROUP BY ri.account_id""").fetchall()
+        for row in rows:
+            report_map[row['account_id']] = row['report_names']
         result, total_dr, total_cr = [], 0, 0
         for acct in accounts:
             raw = get_account_balance(acct['id'], date_to=as_of_date)
@@ -795,7 +804,8 @@ def get_trial_balance(as_of_date=None):
             total_dr += dr; total_cr += cr
             result.append({'id': acct['id'], 'name': acct['name'], 'description': acct['description'],
                 'normal_balance': acct['normal_balance'], 'account_number': acct['account_number'] or '',
-                'balance': bal, 'debit': dr, 'credit': cr})
+                'balance': bal, 'debit': dr, 'credit': cr,
+                'report_name': report_map.get(acct['id'], '')})
         return result, total_dr, total_cr
 
 # ─── Search ───────────────────────────────────────────────────────

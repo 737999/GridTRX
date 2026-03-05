@@ -814,6 +814,25 @@ def _multicol_pdf(report, company, columns, row_data, mode, num_months):
 
 # ─── Report Item Management API ──────────────────────────────────
 
+@app.route('/api/report/<int:report_id>/items')
+def api_report_items(report_id):
+    """Return report items as JSON for placement dialogs."""
+    try:
+        items = models.get_report_items(report_id)
+        result = []
+        for item in items:
+            result.append({
+                'id': item['id'], 'item_type': item['item_type'],
+                'description': item['description'],
+                'acct_name': item['acct_name'] or '',
+                'acct_desc': item['acct_desc'] or '',
+                'indent': item['indent'], 'position': item['position'],
+            })
+        return jsonify({'ok': True, 'items': result})
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)})
+
+
 @app.route('/api/report/<int:report_id>/add-item', methods=['POST'])
 def api_add_report_item(report_id):
     """Add a new account/item to a report."""
@@ -1400,9 +1419,10 @@ def trial_balance():
     as_of = request.args.get('as_of', '')
     accounts, total_dr, total_cr = models.get_trial_balance(as_of or None)
     company = models.get_meta('company_name', 'My Books')
+    reports = models.get_reports()
     return render_template('trial_balance.html', accounts=accounts,
                          total_dr=total_dr, total_cr=total_cr,
-                         as_of=as_of, company=company)
+                         as_of=as_of, company=company, reports=reports)
 
 # ─── Search ─────────────────────────────────────────────────────────
 

@@ -38,12 +38,20 @@
   </thead>
   <tbody>
     {% for acct in accounts %}
-    <tr class="clickable" data-href="{{ url_for('account_ledger', account_id=acct.id) }}"
+    <tr class="clickable{% if not acct.report_name %} orphan-row{% endif %}" data-href="{{ url_for('account_ledger', account_id=acct.id) }}"
         onclick="window.location=this.dataset.href">
       <td style="color:var(--text-muted); font-family:var(--mono); font-size:12px">{{ acct.account_number }}</td>
       <td><strong>{{ acct.name }}</strong></td>
       <td style="color:var(--text-muted)">{{ acct.description }}</td>
-      <td style="color:var(--text-muted); font-size:12px">{{ acct.report_name }}</td>
+      <td style="font-size:12px">
+        {% if acct.report_name %}
+          <span style="color:var(--text-muted)">{{ acct.report_name }}</span>
+        {% else %}
+          <button class="btn-place" onclick="event.stopPropagation(); openPlace('{{ acct.id }}', '{{ acct.name }}', '{{ acct.normal_balance }}')" title="This account is not on any report — click to place it">
+            ⚠ Place
+          </button>
+        {% endif %}
+      </td>
       <td class="num">{% if acct.debit %}{{ acct.debit|money }}{% endif %}</td>
       <td class="num">{% if acct.credit %}{{ acct.credit|money }}{% endif %}</td>
     </tr>
@@ -74,4 +82,143 @@
     </tr>
   </tfoot>
 </table>
+
+<!-- Placement Dialog -->
+<div id="place-overlay" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,0.4); z-index:1000; display:none; align-items:center; justify-content:center;"
+     onclick="if(event.target===this) closePlace()">
+  <div style="background:var(--surface); border:1px solid var(--border); border-radius:6px; padding:24px; width:400px; max-height:80vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,0.2);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
+      <h3 style="margin:0; font-size:14px;">Place <span id="place-acct-name" style="font-family:var(--mono); color:var(--accent)"></span></h3>
+      <button onclick="closePlace()" style="background:none; border:none; font-size:18px; cursor:pointer; color:var(--text-muted);">&times;</button>
+    </div>
+
+    <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Report</label>
+    <select id="place-report" onchange="loadReportItems()" style="width:100%; padding:6px 8px; font-size:13px; font-family:var(--mono); margin-bottom:12px; border:1px solid var(--border); border-radius:3px; background:var(--surface);">
+      <option value="">Select a report...</option>
+      {% for rpt in reports %}
+      <option value="{{ rpt.id }}" data-name="{{ rpt.name }}">{{ rpt.name }}{% if rpt.description %} — {{ rpt.description }}{% endif %}</option>
+      {% endfor %}
+    </select>
+
+    <div id="place-items-section" style="display:none;">
+      <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Place after</label>
+      <select id="place-after" style="width:100%; padding:6px 8px; font-size:13px; font-family:var(--mono); margin-bottom:12px; border:1px solid var(--border); border-radius:3px; background:var(--surface);">
+        <option value="0">— Top of report —</option>
+      </select>
+
+      <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:4px;">Rolls up to (total_to)</label>
+      <select id="place-total-to" style="width:100%; padding:6px 8px; font-size:13px; font-family:var(--mono); margin-bottom:16px; border:1px solid var(--border); border-radius:3px; background:var(--surface);">
+        <option value="">— None —</option>
+      </select>
+
+      <button id="place-submit" class="btn btn-primary" onclick="submitPlace()" style="width:100%; padding:8px; font-size:13px;">Place Account</button>
+    </div>
+
+    <div id="place-status" style="margin-top:8px; font-size:12px;"></div>
+  </div>
+</div>
+
+<style>
+  .orphan-row { background: rgba(196, 90, 60, 0.04); }
+  .orphan-row:hover { background: rgba(196, 90, 60, 0.08); }
+  .btn-place {
+    background: none; border: 1px solid var(--negative); border-radius: 3px;
+    color: var(--negative); font-size: 11px; font-family: var(--mono);
+    padding: 1px 6px; cursor: pointer; white-space: nowrap;
+  }
+  .btn-place:hover { background: var(--negative); color: #fff; }
+</style>
+
+<script>
+let placeAccountId = null;
+let placeAccountName = '';
+
+function openPlace(accountId, accountName, normalBalance) {
+  placeAccountId = accountId;
+  placeAccountName = accountName;
+  document.getElementById('place-acct-name').textContent = accountName;
+  document.getElementById('place-report').value = '';
+  document.getElementById('place-items-section').style.display = 'none';
+  document.getElementById('place-status').textContent = '';
+  const overlay = document.getElementById('place-overlay');
+  overlay.style.display = 'flex';
+}
+
+function closePlace() {
+  document.getElementById('place-overlay').style.display = 'none';
+}
+
+async function loadReportItems() {
+  const reportId = document.getElementById('place-report').value;
+  if (!reportId) {
+    document.getElementById('place-items-section').style.display = 'none';
+    return;
+  }
+  try {
+    const resp = await fetch('/api/report/' + reportId + '/items');
+    const data = await resp.json();
+    if (!data.ok) return;
+
+    const afterSel = document.getElementById('place-after');
+    const ttSel = document.getElementById('place-total-to');
+    afterSel.innerHTML = '<option value="0">— Top of report —</option>';
+    ttSel.innerHTML = '<option value="">— None —</option>';
+
+    data.items.forEach(item => {
+      const indent = '  '.repeat(item.indent || 0);
+      const label = indent + (item.acct_name || item.description || '(separator)');
+      const pos = item.position;
+
+      // "After" dropdown — show all items
+      const opt = document.createElement('option');
+      opt.value = pos;
+      opt.textContent = label;
+      afterSel.appendChild(opt);
+
+      // "Total to" dropdown — show only totals
+      if (item.item_type === 'total' && item.acct_name) {
+        const opt2 = document.createElement('option');
+        opt2.value = item.acct_name;
+        opt2.textContent = item.acct_name + ' — ' + (item.description || item.acct_desc || '');
+        ttSel.appendChild(opt2);
+      }
+    });
+
+    document.getElementById('place-items-section').style.display = 'block';
+  } catch (err) {
+    document.getElementById('place-status').textContent = 'Error loading report items.';
+  }
+}
+
+async function submitPlace() {
+  const reportId = document.getElementById('place-report').value;
+  const afterPos = document.getElementById('place-after').value;
+  const totalTo = document.getElementById('place-total-to').value;
+  const statusEl = document.getElementById('place-status');
+
+  if (!reportId) { statusEl.textContent = 'Select a report.'; return; }
+
+  const formData = new FormData();
+  formData.append('item_type', 'account');
+  formData.append('account_name', placeAccountName);
+  formData.append('after_position', afterPos);
+  formData.append('indent', '2');
+  if (totalTo) formData.append('total_to_1', totalTo);
+
+  try {
+    const resp = await fetch('/api/report/' + reportId + '/add-item', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (data.ok) {
+      closePlace();
+      window.location.reload();
+    } else {
+      statusEl.textContent = data.error || 'Failed to place account.';
+      statusEl.style.color = 'var(--negative)';
+    }
+  } catch (err) {
+    statusEl.textContent = 'Could not reach server.';
+    statusEl.style.color = 'var(--negative)';
+  }
+}
+</script>
 {% endblock %}
