@@ -480,6 +480,121 @@ def gl_pdf(company, accounts, bs_ids, begin, end, dr_cr_filter='all'):
     return buf.read()
 
 
+def account_ledger_pdf(company, account_id, acct_name, acct_desc, begin, end, is_bs=False):
+    """Generate a single-account ledger PDF with Dr/Cr columns and running balance.
+
+    Same layout as the GL report but for one account only.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    font, font_b = _setup_fonts()
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    pw, ph = letter
+    margin = 36
+    right_edge = pw - margin
+
+    fs = 6.5
+    line_h = 8.5
+
+    col_date = margin
+    col_ref = margin + 40
+    col_desc = margin + 66
+    col_debit = margin + 310
+    col_credit = margin + 375
+    col_balance = margin + 440
+    col_cross = margin + 510
+    desc_max = 62
+
+    y = ph - margin
+    page_num = 1
+
+    begin_s = _short_date(begin) if begin else 'Start'
+    end_s = _short_date(end) if end else 'Current'
+
+    def header():
+        nonlocal y
+        c.setFont(font_b, 10)
+        c.drawCentredString(pw / 2, ph - margin + 5, company)
+        c.setFont(font_b, 8)
+        c.drawCentredString(pw / 2, ph - margin - 7, f'{acct_name}  {acct_desc}')
+        c.setFont(font, 6)
+        c.drawString(margin, ph - margin - 16, f'{begin_s} to {end_s}')
+        c.drawRightString(right_edge, ph - margin + 5, f'Page {page_num}')
+        y = ph - margin - 24
+
+    def col_header():
+        nonlocal y
+        c.setFont(font_b, fs)
+        c.drawString(col_date, y, 'Date')
+        c.drawString(col_ref, y, 'Ref')
+        c.drawString(col_desc, y, 'Description')
+        c.drawRightString(col_debit + 58, y, 'Debit')
+        c.drawRightString(col_credit + 58, y, 'Credit')
+        c.drawRightString(col_balance + 58, y, 'Balance')
+        c.drawString(col_cross, y, 'Acct')
+        y -= 2
+        c.setLineWidth(0.4)
+        c.line(margin, y, right_edge, y)
+        y -= line_h
+
+    def check_page(need=2):
+        nonlocal y, page_num
+        if y < margin + need * line_h:
+            c.showPage()
+            page_num += 1
+            header()
+            col_header()
+
+    def draw_row(date_s, ref_s, desc_s, debit, credit, balance, cross='', bold=False):
+        nonlocal y
+        check_page()
+        fn = font_b if bold else font
+        c.setFont(fn, fs)
+        c.drawString(col_date, y, date_s)
+        c.drawString(col_ref, y, (ref_s or '')[:6])
+        c.drawString(col_desc, y, (desc_s or '')[:desc_max])
+        if debit:
+            c.drawRightString(col_debit + 58, y, _fmt_money(debit))
+        if credit:
+            c.drawRightString(col_credit + 58, y, _fmt_money(-credit))
+        if balance is not None:
+            c.drawRightString(col_balance + 58, y, _fmt_money(balance))
+        if cross:
+            c.drawString(col_cross, y, cross[:12])
+        y -= line_h
+
+    header()
+    col_header()
+
+    opening, rows, closing = _build_account_detail(account_id, acct_name, acct_desc, begin, end, is_bs)
+
+    draw_row(begin_s, '', 'Opening Balance', 0, 0, opening, bold=True)
+
+    total_dr, total_cr = 0, 0
+    for r in rows:
+        total_dr += r['debit']
+        total_cr += r['credit']
+        draw_row(_short_date(r['date']), r['ref'], r['desc'],
+                 r['debit'], r['credit'], r['balance'], r['cross'])
+
+    check_page()
+    c.setLineWidth(0.3)
+    c.line(col_debit, y + line_h - 2, col_balance + 68, y + line_h - 2)
+
+    draw_row(end_s, '', 'Closing Balance', total_dr, total_cr, closing, bold=True)
+
+    c.setLineWidth(0.4)
+    c.line(col_balance, y + line_h - 2, col_balance + 68, y + line_h - 2)
+    c.line(col_balance, y + line_h - 5, col_balance + 68, y + line_h - 5)
+
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
 def aje_pdf(company, account_id, acct_name, acct_desc, begin, end):
     """Generate AJE report for one account as PDF, grouped by reference.
 

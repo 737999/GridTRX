@@ -14,7 +14,7 @@ import models
 from pdf_reports import (
     _setup_fonts, _fmt_money, _short_date,
     _get_bs_account_ids, _get_report_account_order,
-    _build_account_detail, gl_pdf, aje_pdf, report_pdf,
+    _build_account_detail, gl_pdf, aje_pdf, report_pdf, account_ledger_pdf,
 )
 
 
@@ -3409,6 +3409,62 @@ def _aje_pdf(account_id, acct, begin, end, company):
     fname = f'{acct_name}_{begin}_{end}.pdf' if begin and end else f'{acct_name}.pdf'
     resp.headers['Content-Disposition'] = f'inline; filename={fname}'
     return resp
+
+
+@app.route('/reports/ledger/<int:account_id>')
+def report_ledger_pdf(account_id):
+    """Generate single-account ledger PDF. Defaults to current fiscal year."""
+    if not models.get_db_path():
+        return redirect(url_for('library'))
+
+    acct = models.get_account(account_id)
+    if not acct:
+        flash('Account not found', 'error')
+        return redirect(url_for('home'))
+
+    begin = request.args.get('begin', '')
+    end = request.args.get('end', '')
+
+    # Default to current fiscal year if no dates given
+    if not begin and not end:
+        fye = models.get_meta('fiscal_year_end', '12-31')
+        try:
+            fye_m, fye_d = int(fye.split('-')[0]), int(fye.split('-')[1])
+        except (ValueError, IndexError):
+            fye_m, fye_d = 12, 31
+        today = date.today()
+        # FY start = day after prior year-end
+        if fye_m == 12 and fye_d == 31:
+            fy_start_m, fy_start_d = 1, 1
+        else:
+            from calendar import monthrange
+            _, last = monthrange(2000, fye_m)
+            if fye_d >= last:
+                fy_start_m, fy_start_d = (fye_m + 1 if fye_m < 12 else 1), 1
+            else:
+                fy_start_m, fy_start_d = fye_m, fye_d + 1
+        fy_start = date(today.year, fy_start_m, fy_start_d)
+        if fy_start > today:
+            fy_start = date(today.year - 1, fy_start_m, fy_start_d)
+        fy_end = date(fy_start.year if fye_m >= fy_start_m else fy_start.year + 1, fye_m, fye_d)
+        begin = fy_start.isoformat()
+        end = fy_end.isoformat()
+
+    company = models.get_meta('company_name', 'My Books')
+    bs_ids = _get_bs_account_ids()
+    is_bs = acct['id'] in bs_ids
+
+    try:
+        pdf_bytes = account_ledger_pdf(company, account_id, acct['name'],
+                                        acct['description'] or '', begin, end, is_bs)
+        resp = app.make_response(pdf_bytes)
+        resp.headers['Content-Type'] = 'application/pdf'
+        fname = f"{acct['name']}_{begin}_{end}.pdf"
+        resp.headers['Content-Disposition'] = f'inline; filename={fname}'
+        return resp
+    except Exception as e:
+        flash(f'PDF error: {e}. Install reportlab: pip install reportlab', 'error')
+        return redirect(url_for('account_ledger', account_id=account_id))
 
 
 # ─── Setup Subledgers ──────────────────────────────────────────────
