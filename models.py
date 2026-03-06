@@ -6,7 +6,7 @@ Items can be posting accounts, total accounts, labels, or separators.
 All amounts stored as integers (cents). Double-entry enforced.
 One data layer — CLI, MCP server, and browser UI all call these functions.
 """
-import sqlite3, os
+import sqlite3, os, re as _re
 from datetime import datetime, date
 from contextlib import contextmanager
 
@@ -124,6 +124,16 @@ CREATE TABLE IF NOT EXISTS import_rules (
     notes TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_rules_kw ON import_rules(keyword);
+
+CREATE TABLE IF NOT EXISTS engagement_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    period TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_date TEXT NOT NULL DEFAULT (date('now')),
+    detail TEXT DEFAULT '',
+    created_at TEXT DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS idx_engage_period ON engagement_log(period);
 """
 
 # ─── Meta ──────────────────────────────────────────────────────────
@@ -863,10 +873,18 @@ def apply_rules(description, amount_cents):
     If no rule matches, returns ('EX.SUSP', '', simple_lines)."""
     rules = get_import_rules()
     desc_lower = description.lower()
-    
+    desc_norm = desc_lower.replace('-', ' ')
+
     matched_rule = None
     for rule in rules:
-        if rule['keyword'].lower() in desc_lower:
+        kw = rule['keyword'].lower().replace('-', ' ')
+        if len(kw) <= 4:
+            # Short keywords require word boundary match to avoid
+            # false positives like NSF matching traNSFer
+            if _re.search(r'(?<![a-z])' + _re.escape(kw) + r'(?![a-z])', desc_norm):
+                matched_rule = rule
+                break
+        elif kw in desc_norm:
             matched_rule = rule
             break  # rules are priority-sorted, first match wins
     
@@ -895,6 +913,267 @@ def apply_rules(description, amount_cents):
             return acct_name, tax_id, {'net': net_cents, 'tax': tax_cents, 'tax_acct': tax_acct}
     
     return acct_name, tax_id, None
+
+# ─── Suspense Reclassification ────────────────────────────────────
+
+GENERIC_TERMS = {
+    # Banking operations
+    'cheque', 'check', 'chq', 'transfer', 'trf', 'tfr', 'xfer',
+    'deposit', 'payment', 'withdrawal', 'debit', 'credit',
+    'e-transfer', 'etransfer', 'interac', 'eft',
+    'wire', 'draft', 'preauthorized', 'pre-authorized', 'pap',
+    'pos', 'point of sale',
+    # Generic descriptors
+    'invoice', 'inv', 'receipt', 'refund', 'reversal',
+    'fee', 'charge', 'interest', 'service charge',
+    'monthly', 'annual', 'quarterly', 'weekly',
+    'personal', 'business', 'commercial',
+    'online', 'mobile', 'telephone', 'phone',
+    # Catch-all banking
+    'misc', 'miscellaneous', 'sundry', 'other', 'general',
+    'adjustment', 'correction', 'void', 'acct', 'account',
+    # Payroll
+    'payroll', 'salary', 'wages', 'pay',
+    # Too common
+    'purchase', 'buy', 'sale', 'order',
+    # Shareholder / owner (case-by-case)
+    'sh draw', 'shareholder', 'owner', 'director',
+    'draw', 'advance', 'loan',
+    # Ambiguous
+    'rent', 'lease',
+    # Locations (not vendors)
+    'downtown', 'uptown', 'midtown', 'core', 'central',
+    'north', 'south', 'east', 'west', 'northwest', 'northeast',
+    'southwest', 'southeast', 'sent', 'received',
+}
+
+def _extract_rule_keyword(description):
+    """Extract a specific vendor/trade keyword from a transaction description.
+    Returns the keyword string or '' if too generic."""
+    if not description:
+        return ''
+    s = description.upper().strip()
+    # Remove noise suffixes: terminal IDs, store numbers, dates, cities
+    s = _re.sub(r'\s+STN\s*\d+', '', s)
+    s = _re.sub(r'\s+STORE\s*\d+', '', s)
+    s = _re.sub(r'\s+UNIT\s*\d+', '', s)
+    s = _re.sub(r'\s*#\d+', '', s)
+    s = _re.sub(r'\s+-\s+[A-Z]{2,3}$', '', s)  # trailing province codes
+    s = _re.sub(r'\s+-\s+[A-Z]+\s+[A-Z]{2}$', '', s)  # "- CALGARY AB"
+    s = _re.sub(r'\s+(JANUARY|FEBRUARY|MARCH|APRIL|MAY|JUNE|JULY|AUGUST|SEPTEMBER|OCTOBER|NOVEMBER|DECEMBER)\s*\d*', '', s)
+    s = _re.sub(r'\s+(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)\s*\d*', '', s)
+    s = _re.sub(r'\s+Q[1-4]$', '', s)
+    s = _re.sub(r'\s+(MONTHLY|ANNUAL|QUARTERLY|WEEKLY|ONLINE|MOBILE)$', '', s)
+    s = _re.sub(r'\s+\d{4,}$', '', s)  # trailing long numbers
+    # Strip generic prefix/suffix words and separators
+    s = _re.sub(r'\s*-\s*', ' ', s)  # normalize dashes to spaces
+    s = s.strip()
+    if not s or len(s) < 3:
+        return ''
+    # Strip leading generic/short words (POS PURCHASE, E-TRANSFER DEPOSIT, etc.)
+    words = s.split()
+    while words and (words[0].lower() in GENERIC_TERMS or len(words[0]) <= 2):
+        words.pop(0)
+    # Strip trailing generic/short words
+    while words and (words[-1].lower() in GENERIC_TERMS or len(words[-1]) <= 2):
+        words.pop()
+    # If nothing left after stripping generic words, reject
+    if not words:
+        return ''
+    s = ' '.join(words)
+    if len(s) < 3:
+        return ''
+    # Check if every remaining word is generic or too short
+    remaining = s.lower().split()
+    if all(w in GENERIC_TERMS or len(w) <= 2 for w in remaining):
+        return ''
+    # Check if the whole phrase is generic
+    if s.lower() in GENERIC_TERMS:
+        return ''
+    return s
+
+def _rule_already_exists(keyword):
+    """Check if a rule exists that would cover this keyword."""
+    kw_lower = keyword.lower()
+    rules = get_import_rules()
+    for rule in rules:
+        rk = rule['keyword'].lower()
+        if rk == kw_lower:
+            return True
+        if rk in kw_lower or kw_lower in rk:
+            return True
+    return False
+
+def reclassify_suspense(txn_id, target_account_name, tax_code=''):
+    """Reclassify a suspense transaction to the correct account in-place.
+
+    Args:
+        txn_id: Transaction ID to reclassify
+        target_account_name: Account name to reclassify to (e.g. 'EX.OFFICE')
+        tax_code: Optional tax code (e.g. 'G5'). Splits amount into net + tax.
+
+    Returns:
+        dict with: txn_id, old_account, new_account, amount_cents, amount_display,
+        tax_applied, tax_amount_cents, net_amount_cents, rule_created, rule_keyword, warning
+    """
+    if target_account_name.upper() == 'EX.SUSP':
+        raise ValueError("Cannot reclassify to EX.SUSP — that's a no-op.")
+
+    txn, lines = get_transaction(txn_id)
+    if not txn:
+        raise ValueError(f"Transaction {txn_id} not found.")
+    if len(lines) != 2:
+        raise ValueError(
+            f"Transaction has {len(lines)} lines — expected 2. "
+            "Use update_transaction() directly for complex reclassifications.")
+
+    # Find the EX.SUSP line and the bank line
+    susp_line = bank_line = None
+    for line in lines:
+        if line['account_name'].upper() == 'EX.SUSP':
+            susp_line = line
+        else:
+            bank_line = line
+    if not susp_line:
+        raise ValueError(f"Transaction {txn_id} has no EX.SUSP line — not a suspense transaction.")
+    if not bank_line:
+        raise ValueError(f"Transaction {txn_id} has no bank line.")
+
+    # Resolve target account
+    target_acct = get_account_by_name(target_account_name)
+    if not target_acct:
+        raise ValueError(f"Account '{target_account_name}' not found.")
+
+    susp_amount = susp_line['amount']  # signed cents
+    line_desc = susp_line['description'] or ''
+
+    # Preserve bank line flags
+    bank_tuple = (bank_line['account_id'], bank_line['amount'], bank_line['description'] or '',
+                  bank_line['reconciled'], bank_line['doc_on_file'])
+
+    # Build new lines
+    tax_applied = ''
+    tax_amount_cents = 0
+    net_amount_cents = susp_amount
+
+    if tax_code:
+        tc = get_tax_code(tax_code)
+        if tc and tc['rate_percent'] > 0:
+            rate = tc['rate_percent']
+            tax_cents = round(abs(susp_amount) * rate / (100 + rate))
+            net_cents = abs(susp_amount) - tax_cents
+            # Reapply sign
+            sign = 1 if susp_amount > 0 else -1
+            net_signed = net_cents * sign
+            tax_signed = tax_cents * sign
+            # Determine tax account by direction
+            if bank_line['amount'] < 0:
+                # Bank credit = money going out = expense = ITCs
+                tax_acct_name = tc['paid_account'] or 'GST.IN'
+            else:
+                # Bank debit = money coming in = revenue = GST collected
+                tax_acct_name = tc['collected_account'] or 'GST.OUT'
+            tax_acct = get_account_by_name(tax_acct_name)
+            if not tax_acct:
+                raise ValueError(f"Tax account '{tax_acct_name}' not found.")
+
+            new_lines = [
+                bank_tuple,
+                (target_acct['id'], net_signed, line_desc, 0, 0),
+                (tax_acct['id'], tax_signed, line_desc, 0, 0),
+            ]
+            tax_applied = tax_code
+            tax_amount_cents = tax_signed
+            net_amount_cents = net_signed
+        else:
+            # Tax code exists but rate is 0 (exempt) — no split
+            new_lines = [
+                bank_tuple,
+                (target_acct['id'], susp_amount, line_desc, 0, 0),
+            ]
+    else:
+        new_lines = [
+            bank_tuple,
+            (target_acct['id'], susp_amount, line_desc, 0, 0),
+        ]
+
+    # Update transaction in place
+    try:
+        update_transaction(txn_id, txn['date'], txn['reference'] or '', txn['description'] or '', new_lines)
+    except ValueError as e:
+        if 'lock date' in str(e).lower():
+            raise ValueError(f"Cannot reclassify: transaction is in a locked period.")
+        raise
+
+    # Auto-rule learning
+    rule_created = False
+    rule_keyword = ''
+    txn_desc = txn['description'] or ''
+    candidate = _extract_rule_keyword(txn_desc)
+    if candidate and not _rule_already_exists(candidate):
+        save_import_rule(None, candidate, target_account_name, tax_code, 0, 'auto')
+        rule_created = True
+        rule_keyword = candidate
+
+    # Check if target account is on a report
+    warning = ''
+    rpt = find_report_for_account(target_acct['id'])
+    if not rpt:
+        warning = f"{target_account_name} is not on any report. Add it to IS so it appears on reports."
+
+    return {
+        'txn_id': txn_id,
+        'old_account': 'EX.SUSP',
+        'new_account': target_account_name,
+        'amount_cents': susp_amount,
+        'amount_display': f"{abs(susp_amount)/100:,.2f}",
+        'tax_applied': tax_applied,
+        'tax_amount_cents': tax_amount_cents,
+        'net_amount_cents': net_amount_cents,
+        'rule_created': rule_created,
+        'rule_keyword': rule_keyword,
+        'warning': warning,
+    }
+
+
+def batch_reclassify_suspense(items):
+    """Reclassify multiple suspense transactions.
+
+    Args:
+        items: list of dicts, each with:
+            - txn_id: int
+            - target_account: str
+            - tax_code: str (optional, default '')
+
+    Returns:
+        dict with: processed, failed, rules_created, results
+    """
+    processed = failed = rules_created = 0
+    results = []
+    for item in items:
+        try:
+            r = reclassify_suspense(
+                item['txn_id'],
+                item['target_account'],
+                item.get('tax_code', '')
+            )
+            processed += 1
+            if r['rule_created']:
+                rules_created += 1
+            results.append(r)
+        except (ValueError, Exception) as e:
+            failed += 1
+            results.append({
+                'txn_id': item.get('txn_id'),
+                'error': str(e),
+            })
+    return {
+        'processed': processed,
+        'failed': failed,
+        'rules_created': rules_created,
+        'results': results,
+    }
+
 # ─── Formatting ───────────────────────────────────────────────────
 def fmt_amount(cents):
     if cents == 0: return '—'
@@ -1177,6 +1456,111 @@ def import_rows(bank_account_id, rows):
     }
     return result
 
+
+def import_gl_rows(bank_account_id, rows):
+    """Posting loop for pre-categorized general ledger imports.
+
+    Like import_rows but each row specifies its cross-account directly —
+    no rule matching, no suspense routing. Used when importing from another
+    accounting system (NV1, QuickBooks GL, Sage, etc.) where cross-accounts
+    are already known.
+
+    Args:
+        bank_account_id: int — the primary account for these rows
+        rows: list of dicts with keys: date, description, amount_cents, cross_account
+
+    Returns:
+        dict with: rows_processed, posted, skipped, errors, possible_duplicates
+    """
+    posted = 0
+    skipped = 0
+    errors = []
+    possible_duplicates = []
+    lock = get_meta('lock_date', '')
+
+    # Pre-scan for duplicates on the primary account
+    existing = set()
+    with get_db() as db:
+        for r in db.execute(
+                "SELECT t.date, l.amount FROM lines l "
+                "JOIN transactions t ON l.transaction_id = t.id "
+                "WHERE l.account_id = ?", (bank_account_id,)).fetchall():
+            existing.add((r['date'], r['amount']))
+
+    for row_num, row in enumerate(rows, start=1):
+        row_date = normalize_date(row['date'])
+        row_desc = row['description']
+        amount_cents = row['amount_cents']
+        cross_account = row['cross_account']
+
+        if not row_desc:
+            errors.append({'row': row_num, 'reason': 'Missing description'})
+            skipped += 1
+            continue
+
+        if not row_date:
+            errors.append({'row': row_num, 'reason': f"Bad date '{row['date']}'"})
+            skipped += 1
+            continue
+
+        if lock and row_date <= lock:
+            errors.append({'row': row_num, 'reason': f'Before lock date {lock}'})
+            skipped += 1
+            continue
+
+        ceiling = get_meta('fy_end_date', '')
+        if ceiling and row_date > ceiling:
+            errors.append({'row': row_num, 'reason': f'After fiscal year end {ceiling}'})
+            skipped += 1
+            continue
+
+        if amount_cents == 0:
+            errors.append({'row': row_num, 'reason': 'Zero amount'})
+            skipped += 1
+            continue
+
+        if not cross_account:
+            errors.append({'row': row_num, 'reason': 'Missing cross-account'})
+            skipped += 1
+            continue
+
+        target_acct = get_account_by_name(cross_account)
+        if not target_acct:
+            errors.append({'row': row_num, 'reason': f"Cross-account '{cross_account}' not found"})
+            skipped += 1
+            continue
+
+        # Soft duplicate detection
+        if (row_date, amount_cents) in existing:
+            possible_duplicates.append({
+                'row': row_num, 'date': row_date,
+                'amount': amount_cents, 'description': row_desc[:60]})
+
+        try:
+            if amount_cents < 0:
+                add_simple_transaction(
+                    row_date, '', row_desc,
+                    target_acct['id'], bank_account_id, abs(amount_cents))
+            else:
+                add_simple_transaction(
+                    row_date, '', row_desc,
+                    bank_account_id, target_acct['id'], abs(amount_cents))
+            posted += 1
+            existing.add((row_date, amount_cents))
+        except ValueError as e:
+            errors.append({'row': row_num, 'reason': str(e)})
+            skipped += 1
+
+    result = {
+        'rows_processed': len(rows),
+        'posted': posted,
+        'skipped': skipped,
+        'errors': errors[:20] if errors else [],
+        'possible_duplicates': possible_duplicates[:20] if possible_duplicates else [],
+    }
+    return result
+
+
 # ─── Report Chain Validation ──────────────────────────────────────
 def validate_report_chain():
     """Validate the total-to chain across all reports.
@@ -1424,6 +1808,26 @@ def rollforward(ye_date):
     except ValueError:
         raise ValueError(f"Invalid date format: '{ye_date}'. Use YYYY-MM-DD.")
 
+    # Guard: already rolled forward (duplicate)
+    lock = get_meta('lock_date', '')
+    if lock and ye_date <= lock:
+        raise ValueError(
+            f"Cannot roll forward {ye_date} — it is on or before the lock date ({lock}). "
+            f"This year-end has already been closed.")
+
+    # Guard: must match current fiscal year end (no premature rollforward)
+    current_ceiling = get_meta('fy_end_date', '')
+    if current_ceiling and ye_date != current_ceiling:
+        raise ValueError(
+            f"Cannot roll forward {ye_date} — the current fiscal year ends {current_ceiling}. "
+            f"You can only roll forward the current fiscal year.")
+
+    # Guard: cannot roll forward a year that hasn't ended yet
+    if ye_dt.date() > date.today():
+        raise ValueError(
+            f"Cannot roll forward {ye_date} — that date is in the future. "
+            f"Wait until the fiscal year has ended.")
+
     # Find required accounts
     re_open = get_account_by_name('RE.OPEN')
     if not re_open:
@@ -1484,11 +1888,11 @@ def rollforward(ye_date):
 
     # Advance ceiling to next fiscal year
     fye_md = get_meta('fiscal_year_end', '12-31')
-    new_fy_year = (ye_dt + timedelta(days=1)).strftime('%Y')
     fy_mm, fy_dd = fye_md.split('-')
-    new_ceiling = f"{new_fy_year}-{fy_mm}-{fy_dd}"
+    new_ceiling_year = ye_dt.year + 1
+    new_ceiling = f"{new_ceiling_year}-{fy_mm}-{fy_dd}"
     set_meta('fy_end_date', new_ceiling)
-    set_meta('fiscal_year', new_fy_year)
+    set_meta('fiscal_year', str(new_ceiling_year))
 
     return {
         'txn_id': txn_id,
@@ -1499,7 +1903,7 @@ def rollforward(ye_date):
         'new_fy_start': new_fy_start,
         'lock_date': ye_date,
         'fy_end_date': new_ceiling,
-        'fiscal_year': new_fy_year,
+        'fiscal_year': str(new_ceiling_year),
         'description': desc,
     }
 
@@ -1552,6 +1956,7 @@ def create_starter_books(path, company_name='My Company', fiscal_ye='12-31'):
     ac('LTL','C','Total Long-Term Liabilities','total')
     ac('CAPITAL','C','Share Capital'); ac('RE','C','Retained Earnings','total')
     ac('EQ','C','Total Equity','total')
+    ac('PY.CONV','C','PY Conversion Differences')
     ac('TL','C','TOTAL LIABILITIES & EQUITY','total')
 
     # ── IS accounts ──
@@ -1621,6 +2026,9 @@ def create_starter_books(path, company_name='My Company', fiscal_ye='12-31'):
     bi('label','Equity')
     bi('account','','CAPITAL',2,'EQ'); bi('account','','RE',2,'EQ')
     bi('separator',sep='single'); bi('total','Total Equity','EQ',3,'TL')
+    bi('separator',sep='single'); bi('label','')
+    bi('label','CONVERSION')
+    bi('account','','PY.CONV',2,'TL')
     bi('separator',sep='single'); bi('label','')
     bi('total','TOTAL LIABILITIES & EQUITY','TL',0); bi('separator',sep='double')
 
@@ -2363,3 +2771,70 @@ def import_aje_entries(entries, account_map, ref_prefix, journal_account=None):
             skipped += 1
 
     return {'posted': posted, 'skipped': skipped, 'errors': errors}
+
+
+# ─── Engagement Log ───────────────────────────────────────────────
+
+def log_engagement(period, event_type, detail='', event_date=None):
+    """Log an engagement event for a billing period.
+
+    Args:
+        period: YYYY-MM format (e.g. '2025-03')
+        event_type: one of files_received, import_completed, reminder_first,
+                    reminder_second, client_responded, suspense_cleared,
+                    report_generated, data_reminder, data_deadline, packet_sent
+        detail: free-text detail string
+        event_date: YYYY-MM-DD (defaults to today)
+    """
+    if event_date is None:
+        event_date = date.today().isoformat()
+    with get_db() as db:
+        db.execute("""INSERT INTO engagement_log (period, event_type, event_date, detail)
+                      VALUES (?, ?, ?, ?)""",
+                   (period, event_type, event_date, detail))
+
+
+def get_engagement_log(period=None, limit=100):
+    """Return engagement log entries, optionally filtered by period."""
+    with get_db() as db:
+        if period:
+            rows = db.execute(
+                "SELECT * FROM engagement_log WHERE period=? ORDER BY event_date DESC, id DESC LIMIT ?",
+                (period, limit)).fetchall()
+        else:
+            rows = db.execute(
+                "SELECT * FROM engagement_log ORDER BY event_date DESC, id DESC LIMIT ?",
+                (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_engagement_summary(period):
+    """Return a dict of event_type -> count for a given period."""
+    with get_db() as db:
+        rows = db.execute(
+            "SELECT event_type, COUNT(*) as cnt FROM engagement_log WHERE period=? GROUP BY event_type",
+            (period,)).fetchall()
+    return {r['event_type']: r['cnt'] for r in rows}
+
+
+def get_ytd_engagement(year=None):
+    """Return engagement summary across all periods for a calendar year.
+    Returns list of dicts: [{period, events: {type: count}, total}]
+    """
+    if year is None:
+        year = date.today().year
+    prefix = f'{year}-'
+    with get_db() as db:
+        rows = db.execute(
+            """SELECT period, event_type, COUNT(*) as cnt
+               FROM engagement_log WHERE period LIKE ?
+               GROUP BY period, event_type ORDER BY period""",
+            (prefix + '%',)).fetchall()
+    periods = {}
+    for r in rows:
+        p = r['period']
+        if p not in periods:
+            periods[p] = {'period': p, 'events': {}, 'total': 0}
+        periods[p]['events'][r['event_type']] = r['cnt']
+        periods[p]['total'] += r['cnt']
+    return list(periods.values())

@@ -7,6 +7,7 @@ and mcp_server.py (MCP tools).
 """
 import io
 import os
+import hashlib
 from datetime import datetime, timedelta
 from collections import OrderedDict
 
@@ -724,3 +725,373 @@ def aje_pdf(company, account_id, acct_name, acct_desc, begin, end):
     c.save()
     buf.seek(0)
     return buf.read()
+
+
+def engagement_scorecard_pdf(company, period, ytd_data, period_summary):
+    """Generate engagement scorecard PDF (page 3 of monthly packet).
+
+    Args:
+        company: Company name string.
+        period: Current period 'YYYY-MM'.
+        ytd_data: List from models.get_ytd_engagement() —
+                  [{period, events: {type: count}, total}]
+        period_summary: Dict from models.get_engagement_summary() —
+                        {event_type: count}
+
+    Returns:
+        bytes — the PDF content.
+    """
+    from reportlab.lib.pagesizes import letter
+    from reportlab.pdfgen import canvas
+
+    font, font_b = _setup_fonts()
+
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=letter)
+    pw, ph = letter
+    margin = 36
+    right_edge = pw - margin
+
+    y = ph - margin
+
+    # Header
+    c.setFont(font_b, 10)
+    c.drawCentredString(pw / 2, y + 5, company)
+    y -= 14
+    c.setFont(font_b, 8)
+    c.drawCentredString(pw / 2, y, f'Engagement Scorecard — {period}')
+    y -= 20
+
+    # Current month summary
+    c.setFont(font_b, 8)
+    c.drawString(margin, y, 'This Month')
+    y -= 12
+
+    event_labels = {
+        'files_received': 'Files Received',
+        'import_completed': 'Import Completed',
+        'reminder_first': 'Reminder Sent (1st)',
+        'reminder_second': 'Reminder Sent (2nd)',
+        'client_responded': 'Client Responded',
+        'suspense_cleared': 'Suspense Cleared',
+        'report_generated': 'Report Generated',
+        'data_reminder': 'Data Reminder Sent',
+        'data_deadline': 'Deadline Reminder Sent',
+        'packet_sent': 'Packet Delivered',
+    }
+
+    c.setFont(font, 7)
+    for etype, label in event_labels.items():
+        count = period_summary.get(etype, 0)
+        if count > 0:
+            mark = 'Yes' if count == 1 else f'{count}x'
+            c.drawString(margin + 10, y, f'{label}: {mark}')
+            y -= 10
+    if not period_summary:
+        c.drawString(margin + 10, y, '(no events recorded)')
+        y -= 10
+
+    y -= 10
+
+    # YTD grid
+    c.setFont(font_b, 8)
+    c.drawString(margin, y, 'Year-to-Date Activity')
+    y -= 14
+
+    # Column layout for YTD grid
+    col_period = margin
+    col_files = margin + 60
+    col_import = margin + 120
+    col_remind = margin + 180
+    col_susp = margin + 240
+    col_report = margin + 300
+    col_packet = margin + 360
+
+    c.setFont(font_b, 6.5)
+    c.drawString(col_period, y, 'Period')
+    c.drawString(col_files, y, 'Files')
+    c.drawString(col_import, y, 'Import')
+    c.drawString(col_remind, y, 'Reminders')
+    c.drawString(col_susp, y, 'Suspense')
+    c.drawString(col_report, y, 'Report')
+    c.drawString(col_packet, y, 'Packet')
+    y -= 2
+    c.setLineWidth(0.4)
+    c.line(margin, y, right_edge, y)
+    y -= 10
+
+    c.setFont(font, 6.5)
+    for entry in ytd_data:
+        ev = entry['events']
+        c.drawString(col_period, y, entry['period'])
+        c.drawString(col_files, y, str(ev.get('files_received', 0)))
+        c.drawString(col_import, y, str(ev.get('import_completed', 0)))
+        remind_count = ev.get('reminder_first', 0) + ev.get('reminder_second', 0) + \
+                       ev.get('data_reminder', 0) + ev.get('data_deadline', 0)
+        c.drawString(col_remind, y, str(remind_count))
+        c.drawString(col_susp, y, str(ev.get('suspense_cleared', 0)))
+        c.drawString(col_report, y, str(ev.get('report_generated', 0)))
+        c.drawString(col_packet, y, str(ev.get('packet_sent', 0)))
+        y -= 10
+
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def _monthly_is_pdf(company, report_id, year, through_month):
+    """Generate a 13-column IS: one column per month (Jan-Dec) + YTD total.
+
+    Landscape orientation. Months beyond through_month are blank.
+    """
+    from reportlab.lib.pagesizes import letter, landscape
+    from reportlab.pdfgen import canvas
+    from calendar import monthrange
+
+    font, font_b = _setup_fonts()
+
+    buf = io.BytesIO()
+    pw, ph = landscape(letter)  # 792 x 612
+    c = canvas.Canvas(buf, pagesize=landscape(letter))
+    margin = 28
+    right_edge = pw - margin
+    usable_w = pw - 2 * margin
+
+    fs = 5.5
+    line_h = 8
+    ncols = 13  # 12 months + YTD
+
+    # Layout: description column + 13 amount columns
+    desc_w = 110
+    col_w = (usable_w - desc_w) // ncols
+    max_desc_chars = int(desc_w / (fs * 0.5))
+
+    # Column right-edge positions
+    col_rights = []
+    x = margin + desc_w
+    for i in range(ncols):
+        col_rights.append(x + col_w - 2)
+        x += col_w
+
+    month_names = ['Jan','Feb','Mar','Apr','May','Jun',
+                   'Jul','Aug','Sep','Oct','Nov','Dec','YTD']
+
+    # Compute each month's data
+    month_columns = []  # list of 12 column data lists
+    display_items = models.get_report_items(report_id)
+    all_items = models.get_all_report_items()
+
+    for m in range(1, 13):
+        if m <= through_month:
+            d_from = f'{year}-{m:02d}-01'
+            d_to = f'{year}-{m:02d}-{monthrange(year, m)[1]:02d}'
+            col = models.compute_report_column(
+                report_id, d_from, d_to,
+                _display_items=display_items, _all_items=all_items)
+            month_columns.append(col)
+        else:
+            month_columns.append(None)
+
+    # YTD column
+    ytd_from = f'{year}-01-01'
+    ytd_to = f'{year}-{through_month:02d}-{monthrange(year, through_month)[1]:02d}'
+    ytd_col = models.compute_report_column(
+        report_id, ytd_from, ytd_to,
+        _display_items=display_items, _all_items=all_items)
+    month_columns.append(ytd_col)
+
+    # Build unified row list from YTD column (has all items)
+    rows = []
+    for idx, (item, ytd_amt) in enumerate(ytd_col):
+        month_vals = []
+        for m_idx in range(12):
+            mc = month_columns[m_idx]
+            if mc is None:
+                month_vals.append(None)
+            else:
+                month_vals.append(mc[idx][1] if idx < len(mc) else 0)
+        month_vals.append(ytd_amt)
+        rows.append((item, month_vals))
+
+    y = ph - margin
+    page_num = 1
+
+    def header():
+        nonlocal y
+        c.setFont(font_b, 8)
+        c.drawCentredString(pw / 2, ph - margin + 5, company)
+        c.setFont(font_b, 6)
+        c.drawCentredString(pw / 2, ph - margin - 5,
+            f'Income Statement — Monthly Detail — {year}')
+        c.setFont(font, 5)
+        c.drawRightString(right_edge, ph - margin + 5, f'Page {page_num}')
+        y = ph - margin - 12
+
+    def col_header():
+        nonlocal y
+        c.setFont(font_b, fs - 0.5)
+        c.drawString(margin, y, 'Description')
+        for i, label in enumerate(month_names):
+            c.drawRightString(col_rights[i], y, label)
+        y -= 2
+        c.setLineWidth(0.4)
+        c.line(margin, y, right_edge, y)
+        y -= line_h
+
+    def check_page(need=2):
+        nonlocal y, page_num
+        if y < margin + need * line_h:
+            c.showPage()
+            page_num += 1
+            header()
+            col_header()
+
+    header()
+    col_header()
+
+    for item, vals in rows:
+        itype = item.get('item_type', 'account')
+        indent = item.get('indent', 0) or 0
+
+        if itype == 'separator':
+            check_page()
+            style = item.get('sep_style', 'single')
+            if style == 'double':
+                c.setLineWidth(0.4)
+                ly = y + line_h * 0.4
+                c.line(margin + desc_w, ly, right_edge, ly)
+                c.line(margin + desc_w, ly - 2, right_edge, ly - 2)
+            elif style != 'blank':
+                c.setLineWidth(0.2)
+                c.line(margin + desc_w, y + line_h * 0.4, right_edge, y + line_h * 0.4)
+            y -= line_h
+            continue
+
+        if itype == 'label':
+            check_page()
+            desc = item.get('description') or ''
+            if desc:
+                c.setFont(font_b, fs)
+                c.drawString(margin, y, ('  ' * indent + desc)[:max_desc_chars])
+            y -= line_h
+            continue
+
+        if itype in ('account', 'total'):
+            # Skip zero rows for accounts
+            if itype == 'account' and all((v is None or v == 0) for v in vals):
+                continue
+
+            check_page()
+            if item.get('acct_desc'):
+                desc = item['acct_desc']
+            else:
+                desc = item.get('description') or item.get('acct_desc') or item.get('acct_name') or ''
+            is_total = itype == 'total'
+            fn = font_b if is_total else font
+            c.setFont(fn, fs)
+            c.drawString(margin, y, ('  ' * indent + desc)[:max_desc_chars])
+
+            for i, v in enumerate(vals):
+                if v is None:
+                    continue
+                c.setFont(fn, fs)
+                c.drawRightString(col_rights[i], y, _fmt_money(v))
+            y -= line_h
+
+    c.save()
+    buf.seek(0)
+    return buf.read()
+
+
+def monthly_packet_pdf(company, db_path, period_end, period_start=None):
+    """Generate monthly client packet: BS + YTD IS + 13-col Monthly IS + Scorecard.
+
+    Merges separate PDFs using PyPDF2. Applies StandardEncryption
+    (no password to open, owner password 'gridbk', no modifications allowed).
+
+    Args:
+        company: Company name string.
+        db_path: Path to the client's books.db.
+        period_end: End date 'YYYY-MM-DD'.
+        period_start: Start date 'YYYY-MM-DD' (defaults to Jan 1 of the year).
+
+    Returns:
+        dict with keys:
+            pdf_bytes: bytes — the merged PDF content
+            sha256: str — hex digest of the PDF
+            pages: int — number of pages
+    """
+    from PyPDF2 import PdfMerger, PdfReader, PdfWriter
+
+    models.init_db(db_path)
+
+    # Derive period
+    year = int(period_end[:4])
+    month = int(period_end[5:7])
+    period = period_end[:7]  # YYYY-MM
+    fy_start = f'{year}-01-01'
+
+    # Page 1: Balance Sheet (cumulative as-of period end)
+    bs_report = models.find_report_by_name('BS')
+    bs_bytes = b''
+    if bs_report:
+        col_data = models.compute_report_column(bs_report['id'], None, period_end)
+        bs_bytes = report_pdf(
+            company, f'Balance Sheet — As at {_short_date(period_end)}',
+            [_short_date(period_end)], ['actual'],
+            [(item, [amt]) for item, amt in col_data]
+        )
+
+    # Page 2: Income Statement YTD (Jan 1 to period end)
+    is_report = models.find_report_by_name('IS')
+    is_bytes = b''
+    if is_report:
+        col_data = models.compute_report_column(is_report['id'], fy_start, period_end)
+        is_bytes = report_pdf(
+            company, f'Income Statement — Year to Date',
+            [f'{_short_date(fy_start)} to {_short_date(period_end)}'], ['actual'],
+            [(item, [amt]) for item, amt in col_data]
+        )
+
+    # Page 3: 13-column Monthly IS (landscape)
+    monthly_is_bytes = b''
+    if is_report:
+        monthly_is_bytes = _monthly_is_pdf(company, is_report['id'], year, month)
+
+    # Page 4: Engagement Scorecard
+    ytd_data = models.get_ytd_engagement(year)
+    period_summary = models.get_engagement_summary(period)
+    scorecard_bytes = engagement_scorecard_pdf(company, period, ytd_data, period_summary)
+
+    # Merge
+    merger = PdfMerger()
+    for pdf_bytes in [bs_bytes, is_bytes, monthly_is_bytes, scorecard_bytes]:
+        if pdf_bytes:
+            merger.append(io.BytesIO(pdf_bytes))
+    merged_buf = io.BytesIO()
+    merger.write(merged_buf)
+    merger.close()
+
+    merged_bytes = merged_buf.getvalue()
+
+    # Apply encryption: no password to open, owner password restricts editing
+    reader = PdfReader(io.BytesIO(merged_bytes))
+    writer = PdfWriter()
+    for page in reader.pages:
+        writer.add_page(page)
+    writer.encrypt(user_password='', owner_password='gridbk',
+                   permissions_flag=0b0100)  # allow printing only
+
+    encrypted_buf = io.BytesIO()
+    writer.write(encrypted_buf)
+    final_bytes = encrypted_buf.getvalue()
+
+    # Hash
+    sha = hashlib.sha256(final_bytes).hexdigest()
+    page_count = len(reader.pages)
+
+    return {
+        'pdf_bytes': final_bytes,
+        'sha256': sha,
+        'pages': page_count,
+    }

@@ -98,7 +98,21 @@ This creates `books.db` with a full chart of accounts (~60 posting accounts), fi
 After setup, run `validate` to confirm the report chain is intact:
 **CLI:** `python cli.py /path/to/books.db validate`
 
-### Step 2: Import bank data
+### Step 2: Import data
+
+#### Bulk import decision rule
+
+| Data source | Tool | Notes |
+|---|---|---|
+| Bank CSV (3-col: Date, Description, Amount) | `import_csv` | Rule-based categorization, unmatched → EX.SUSP |
+| Bank OFX/QBO | `import_ofx` | Rule-based categorization, FITID dedup |
+| GL export / system conversion (4-col: Date, Description, Amount, CrossAccount) | `import_gl` | Cross-account specified per row, no rules needed |
+| CaseWare AJE (IIF or Venice) | `import_aje` | Routes through journal account |
+| Single manual entry | `post_transaction` | One at a time only |
+
+Never call `post_transaction` in a loop to import bank data. Use the appropriate bulk tool.
+
+#### Bank CSV / OFX import
 
 **MCP (preferred):**
 - CSV: `import_csv(db_path, csv_path, "BANK.CHQ")`
@@ -108,9 +122,18 @@ After setup, run `validate` to confirm the report chain is intact:
 - CSV: `python cli.py /path/to/books.db importcsv /path/to/file.csv BANK.CHQ`
 - OFX: `python cli.py /path/to/books.db importofx /path/to/file.qbo BANK.CHQ`
 
-The import applies all rules automatically. Check the result summary: `posted`, `skipped`, `to_suspense`.
+**CSV format required:** 3 columns — Date, Description, Amount. Deposits positive, withdrawals negative. Header row optional. The import applies all rules automatically. Check the result summary: `posted`, `skipped`, `to_suspense`.
 
-**CaseWare AJE import:**
+#### General ledger import (system conversion)
+
+**MCP:** `import_gl(db_path, csv_path, "BANK.CHQ")`
+
+**CSV format required:** 4 columns — Date, Description, Amount, CrossAccount. Positive = debit to the primary account, negative = credit. All cross-accounts must already exist in the chart of accounts. No import rules are applied — the cross-account column is used directly.
+
+Use this when converting from another accounting system (NV1, QuickBooks GL, Sage, etc.) where every transaction already has its cross-account known. Prepare one CSV per primary account (bank, credit card, etc.) per fiscal year.
+
+#### CaseWare AJE import
+
 - MCP: `import_aje(db_path, file_path, "25AJE")`
 - CLI: `python cli.py /path/to/books.db importaje /path/to/aje_export.iif 25AJE`
 - Supports QuickBooks IIF and Venice/MYOB text formats. Maps CsW account descriptions to Grid account codes.
@@ -165,6 +188,33 @@ When the fiscal year is complete:
 
 This reads RE.CLOSE from the IS, posts Dr RE.OFS / Cr RE.OPEN, sets the lock date, and advances the FY ceiling to the next year. Then repeat from Step 2 for the next fiscal year. Rows beyond the ceiling are automatically skipped during import.
 
+## Multi-year backfill protocol
+
+When importing multiple fiscal years of historical data:
+
+1. **Check the ceiling:** `get_info(db_path)` — note the `fy_end_date`.
+2. **Prepare per-FY CSVs:** One CSV per primary account per fiscal year. Only include transactions within that FY's date range.
+3. **Import the earliest FY first:** Use `import_csv`, `import_ofx`, or `import_gl` for each bank account. Rows after the ceiling are automatically skipped.
+4. **Rollforward:** `year_end(db_path, "YYYY-MM-DD")` — this posts the RE closing entry, sets the lock date, and advances the ceiling to the next FY.
+5. **Repeat** steps 3-4 for each subsequent fiscal year.
+
+**Example (3-year backfill, Dec 31 FY):**
+```
+# FY2022 — ceiling is 2022-12-31
+import_gl(db, "fy2022_bank_cdn.csv", "BANK.CDN")
+import_gl(db, "fy2022_cc_visa.csv", "CC.VISA")
+year_end(db, "2022-12-31")
+
+# FY2023 — ceiling is now 2023-12-31
+import_gl(db, "fy2023_bank_cdn.csv", "BANK.CDN")
+import_gl(db, "fy2023_cc_visa.csv", "CC.VISA")
+year_end(db, "2023-12-31")
+
+# FY2024 — ceiling is now 2024-12-31
+import_csv(db, "fy2024_bank_cdn.csv", "BANK.CDN")  # current year, use rules
+import_csv(db, "fy2024_cc_visa.csv", "CC.VISA")
+```
+
 ## Recovery: Undoing a bad import
 
 If the user uploaded the wrong file or you imported against the wrong account:
@@ -176,7 +226,7 @@ If the user uploaded the wrong file or you imported against the wrong account:
 
 There is no bulk undo. Deletions are individual and respect the lock date — you cannot delete transactions in a locked period.
 
-## MCP tools reference (20 tools)
+## MCP tools reference (21 tools)
 
 ### Read tools
 | Tool | Purpose |
@@ -200,8 +250,9 @@ There is no bulk undo. Deletions are individual and respect the lock date — yo
 | `add_account(db_path, name, normal_balance, description?)` | Add a posting account |
 | `add_rule(db_path, keyword, account_name, tax_code?, priority?)` | Add an import rule |
 | `delete_rule(db_path, rule_id)` | Delete an import rule |
-| `import_csv(db_path, csv_path, bank_account)` | Import bank CSV |
-| `import_ofx(db_path, ofx_path, bank_account)` | Import bank OFX/QBO |
+| `import_csv(db_path, csv_path, bank_account)` | Import bank CSV (3-col, rule-based) |
+| `import_ofx(db_path, ofx_path, bank_account)` | Import bank OFX/QBO (rule-based) |
+| `import_gl(db_path, csv_path, bank_account)` | Import GL CSV (4-col, cross-account per row) |
 | `import_aje(db_path, file_path, ref_prefix)` | Import CaseWare AJE export (IIF or Venice) |
 | `rollforward(db_path, ye_date)` | Year-end rollforward (posts RE closing, sets lock, advances ceiling) |
 | `year_end(db_path, ye_date)` | Alias for rollforward |

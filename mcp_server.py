@@ -867,6 +867,102 @@ def import_ofx(db_path: str, ofx_path: str, bank_account: str) -> dict:
 
 
 @mcp.tool()
+def import_gl(db_path: str, csv_path: str, bank_account: str) -> dict:
+    """Import a pre-categorized general ledger CSV. Cross-accounts are specified per row.
+
+    Use this when converting from another accounting system (NV1, QuickBooks GL,
+    Sage, etc.) where every transaction already has its cross-account known.
+    No import rules are applied — the cross-account column is used directly.
+
+    CSV format: Date, Description, Amount, CrossAccount.
+    Positive amounts = debits to the primary account, negative = credits.
+    All cross-accounts must already exist in the chart of accounts.
+    """
+    _init(db_path)
+
+    csv_path = _check_path(csv_path, "csv_path")
+    if not os.path.exists(csv_path):
+        raise ValueError(f"File not found: {csv_path}")
+
+    bank_acct = models.get_account_by_name(bank_account)
+    if not bank_acct:
+        raise ValueError(f"Account not found: {bank_account}")
+
+    with open(csv_path, "r", encoding="utf-8-sig") as f:
+        reader = csv.reader(f)
+        rows_raw = list(reader)
+
+    if not rows_raw:
+        raise ValueError("Empty CSV file")
+
+    # Detect header row
+    first = rows_raw[0]
+    has_header = any(h.strip().lower() in ('date', 'description', 'amount', 'crossaccount', 'cross_account')
+                     for h in first)
+    data_rows = rows_raw[1:] if has_header else rows_raw
+
+    if not data_rows:
+        raise ValueError("No data rows in CSV (only a header)")
+
+    import_data = []
+    parse_errors = []
+    for row_num, row in enumerate(data_rows, start=2 if has_header else 1):
+        if len(row) < 4:
+            parse_errors.append({"row": row_num, "reason": f"Need 4 columns, got {len(row)}"})
+            continue
+
+        row_date = row[0].strip()
+        row_desc = row[1].strip()
+        cross_acct = row[3].strip()
+
+        if not row_desc:
+            parse_errors.append({"row": row_num, "reason": "Missing description"})
+            continue
+
+        if not cross_acct:
+            parse_errors.append({"row": row_num, "reason": "Missing cross-account"})
+            continue
+
+        try:
+            amount_cents = models.parse_amount(row[2])
+        except Exception:
+            parse_errors.append({"row": row_num, "reason": f"Bad amount '{row[2].strip()}'"})
+            continue
+
+        import_data.append({
+            'date': row_date,
+            'description': row_desc,
+            'amount_cents': amount_cents,
+            'cross_account': cross_acct,
+        })
+
+    result = models.import_gl_rows(bank_acct['id'], import_data)
+    result['rows_processed'] = len(data_rows)
+    result['skipped'] = result['skipped'] + len(parse_errors)
+    if parse_errors:
+        all_errors = parse_errors + result.get('errors', [])
+        result['errors'] = all_errors[:20]
+    return result
+
+
+@mcp.tool()
+def reclassify_suspense(db_path: str, txn_id: int, target_account: str, tax_code: str = '') -> dict:
+    """Reclassify a suspense (EX.SUSP) transaction to the correct expense/revenue account.
+
+    Swaps the EX.SUSP line for the target account in-place. If a tax_code is
+    provided (e.g. 'G5'), splits the amount into net + tax components.
+    Automatically learns an import rule from the transaction description
+    if the vendor name is specific enough and no matching rule exists.
+
+    txn_id: the transaction to reclassify (must have an EX.SUSP line).
+    target_account: account name to reclassify to (e.g. 'EX.OFFICE').
+    tax_code: optional tax code to apply (e.g. 'G5', 'H13'). Empty = no tax.
+    """
+    _init(db_path)
+    return models.reclassify_suspense(txn_id, target_account, tax_code)
+
+
+@mcp.tool()
 def year_end(db_path: str, ye_date: str) -> dict:
     """Year-end rollover. Posts closing RE offset entry and sets lock date.
 

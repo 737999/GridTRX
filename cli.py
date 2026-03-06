@@ -255,6 +255,11 @@ class GridCLI(cmd.Cmd):
       Import a bank OFX/QBO file. Applies rules automatically.
       Example: importofx downloads/jan2025.qbo BANK.CHQ
 
+    importgl <csvfile> <bank_account>
+      Import a pre-categorized GL CSV (Date, Description, Amount, CrossAccount).
+      No rules applied — cross-account is specified per row.
+      Example: importgl fy2024_bank_cdn.csv BANK.CDN
+
     importaje <file> [ref_prefix]
       Import CaseWare AJE export (IIF or Venice format).
       Maps CsW accounts to Grid accounts, posts all entries.
@@ -1074,6 +1079,33 @@ class GridCLI(cmd.Cmd):
         models.delete_transaction(txn_id)
         print(f"  ✓ Deleted #{txn_id}: {txn['date']} | {txn['description']} | {len(lines)} lines")
 
+    def do_reclass(self, arg):
+        """Reclassify a suspense transaction. Usage: reclass <txn_id> <account> [tax_code]"""
+        if not self._require_books():
+            return
+        parts = arg.strip().split()
+        if len(parts) < 2:
+            print("  Usage: reclass <txn_id> <account> [tax_code]")
+            print("  Example: reclass 42 EX.OFFICE G5")
+            return
+        if not parts[0].isdigit():
+            print(f"  Invalid transaction ID: '{parts[0]}'")
+            return
+        txn_id = int(parts[0])
+        target = parts[1]
+        tax_code = parts[2] if len(parts) > 2 else ''
+        try:
+            r = models.reclassify_suspense(txn_id, target, tax_code)
+            print(f"  ✓ Reclassified #{txn_id}: EX.SUSP → {r['new_account']}  ${r['amount_display']}")
+            if r['tax_applied']:
+                print(f"    Tax: {r['tax_applied']}  ${r['tax_amount_cents']/100:,.2f}  Net: ${r['net_amount_cents']/100:,.2f}")
+            if r['rule_created']:
+                print(f"    Auto-rule: '{r['rule_keyword']}' → {r['new_account']}")
+            if r['warning']:
+                print(f"    ⚠ {r['warning']}")
+        except ValueError as e:
+            print(f"  Error: {e}")
+
     def do_search(self, arg):
         """Search transactions. Usage: search <query>"""
         if not self._require_books():
@@ -1328,6 +1360,138 @@ class GridCLI(cmd.Cmd):
             print("  Review them: ledger EX.SUSP")
             print("  Add rules to prevent this: addrule <keyword> <account>")
         if result['posted']:
+            print(f"\n  Verify the import: ledger {bank_acct['name']}")
+
+    def do_importgl(self, arg):
+        """Import a pre-categorized general ledger CSV.
+        Usage: importgl <csvfile> <bank_account>
+        Example: importgl fy2024_bank_cdn.csv BANK.CDN
+
+        CSV format: Date, Description, Amount, CrossAccount
+        Positive = debit to bank_account, negative = credit.
+        Cross-accounts must already exist. No rules applied.
+
+        Use when converting from another accounting system (NV1, QuickBooks GL,
+        Sage, etc.) where every transaction already has its cross-account known.
+        """
+        if not self._require_books():
+            return
+
+        parts = _split_args(arg)
+        if len(parts) < 2:
+            print("  Usage: importgl <csvfile> <bank_account>")
+            print("  Example: importgl fy2024_bank_cdn.csv BANK.CDN")
+            print()
+            print("  CSV format: Date, Description, Amount, CrossAccount")
+            return
+
+        csv_path = os.path.expanduser(parts[0])
+        if not _check_workspace(csv_path):
+            return
+        if not os.path.exists(csv_path):
+            print(f"  File not found: {csv_path}")
+            return
+
+        bank_acct = resolve_account(parts[1])
+        if not bank_acct:
+            return
+
+        if not self._check_posting_account(bank_acct):
+            return
+
+        # Read CSV
+        try:
+            with open(csv_path, 'r', encoding='utf-8-sig') as f:
+                reader = csv.reader(f)
+                rows_raw = list(reader)
+        except Exception as e:
+            print(f"  Cannot read CSV file: {e}")
+            return
+
+        if not rows_raw:
+            print("  Empty CSV file.")
+            return
+
+        # Detect header
+        first = rows_raw[0]
+        has_header = any(h.strip().lower() in ('date', 'description', 'amount', 'crossaccount', 'cross_account')
+                         for h in first)
+        data_rows = rows_raw[1:] if has_header else rows_raw
+
+        if not data_rows:
+            print("  No data rows in CSV (only a header).")
+            return
+
+        # Build row dicts
+        import_data = []
+        parse_errors = []
+        for row_num, row in enumerate(data_rows, start=2 if has_header else 1):
+            if len(row) < 4:
+                parse_errors.append((row_num, f"Need 4 columns, got {len(row)}", ' | '.join(row)))
+                continue
+
+            row_date = row[0].strip()
+            row_desc = row[1].strip()
+            cross_acct = row[3].strip()
+
+            if not row_desc:
+                parse_errors.append((row_num, "Missing description", row_date))
+                continue
+
+            if not cross_acct:
+                parse_errors.append((row_num, "Missing cross-account", row_desc[:30]))
+                continue
+
+            try:
+                amount_cents = parse_amount(row[2])
+            except Exception:
+                parse_errors.append((row_num, f"Bad amount '{row[2].strip()}'", row_desc[:30]))
+                continue
+
+            import_data.append({
+                'date': row_date,
+                'description': row_desc,
+                'amount_cents': amount_cents,
+                'cross_account': cross_acct,
+            })
+
+        result = models.import_gl_rows(bank_acct['id'], import_data)
+        posted = result['posted']
+        skipped = result['skipped'] + len(parse_errors)
+
+        # Summary
+        print(f"\n  GL import complete: {csv_path}")
+        print(f"    Rows processed: {len(data_rows)}")
+        print(f"    Posted:         {posted}")
+        print(f"    Skipped:        {skipped}")
+
+        # Show errors
+        all_errors = [(r, reason, detail) for r, reason, detail in parse_errors]
+        if result.get('errors'):
+            for e in result['errors']:
+                all_errors.append((e['row'], e['reason'], ''))
+        if all_errors:
+            print(f"\n  Errors ({len(all_errors)}):")
+            for row_num, reason, detail in all_errors[:20]:
+                msg = f"    Row {row_num}: {reason}"
+                if detail:
+                    msg += f" — {detail}"
+                print(msg)
+            if len(all_errors) > 20:
+                print(f"    ... and {len(all_errors) - 20} more")
+
+        # Show possible duplicates
+        dupes = result.get('possible_duplicates', [])
+        if dupes:
+            print(f"\n  Possible duplicates ({len(dupes)}):")
+            print(f"    These rows match existing transactions (same date + amount).")
+            print(f"    They were posted — review and delete if they are actual duplicates.")
+            for d in dupes[:10]:
+                print(f"    Row {d['row']}: {d['date']}  {models.fmt_amount(abs(d['amount'])):>12s}  {d['description']}")
+            if len(dupes) > 10:
+                print(f"    ... and {len(dupes) - 10} more")
+
+        if posted:
             print(f"\n  Verify the import: ledger {bank_acct['name']}")
 
     def do_importaje(self, arg):
