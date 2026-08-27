@@ -1,0 +1,425 @@
+{% extends "base.html" %}
+{% block title %}Opening balances{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">›</span>TRX<span class="sep">›</span>Opening balances</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  /* A pop-up over the workings ledger: one focused surface, nothing else to
+     click. The conversion is a single sitting — you finish it or you leave it. */
+  .ob-back { position:fixed; inset:28px 0 0 0; background:rgba(0,0,0,.35); z-index:50; }
+  .ob-wrap { position:relative; z-index:51; max-width:1000px; margin:10px auto 40px;
+    background:var(--surface); border:1px solid #666; border-radius:4px;
+    box-shadow:0 12px 40px rgba(0,0,0,.4); }
+  .ob-head { padding:10px 14px; border-bottom:1px solid var(--border); }
+  .ob-head h1 { font-size:14px; margin:0 0 2px; }
+  .ob-head .sub { font-size:11px; color:var(--muted); }
+  .ob-date { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .ob-date label { font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.3px; color:var(--muted); }
+  .ob-date input { width:130px; font-family:var(--mono); }
+  .ob-body { padding:0 14px; max-height:calc(100vh - 340px); overflow-y:auto; }
+  table.ob { width:100%; border-collapse:collapse; font-size:11px; }
+  table.ob thead th { position:sticky; top:0; background:var(--surface); z-index:2; }
+  table.ob td { padding:1px 3px; border-bottom:1px solid var(--border-light); }
+  table.ob input { border:1px solid transparent; background:transparent; padding:2px 4px; }
+  table.ob input:focus { border-color:var(--accent); background:var(--surface); }
+  table.ob tr:hover input { border-color:var(--border-light); }
+  .ob-n { width:26px; color:var(--faint); text-align:right; font-family:var(--mono); font-size:10px; }
+  .ob-amt { text-align:right; font-family:var(--mono); }
+  .ob-side { width:26px; font-size:9px; font-weight:700; font-family:var(--mono);
+    text-align:center; color:var(--muted); }
+  .ob-flag { width:44%; font-size:10px; color:#a9700a; padding-left:6px; }
+  .ob-flag.err { color:#b91c1c; font-weight:600; }
+  .ob-foot { border-top:1px solid #999; padding:10px 14px; }
+  .ob-tot { display:flex; gap:18px; font-size:11px; font-family:var(--mono);
+    justify-content:flex-end; padding-bottom:8px; border-bottom:1px solid var(--border-light); }
+  .ob-tot span b { font-family:var(--sans); font-weight:700; color:var(--muted);
+    font-size:10px; text-transform:uppercase; letter-spacing:.3px; margin-right:5px; }
+  /* The self-check. This is the number the operator ties to the prior-year
+     statements, and it is the whole reason retained earnings is never keyed. */
+  .ob-re { display:flex; align-items:center; justify-content:space-between;
+    gap:14px; padding:10px 0 4px; }
+  .ob-re-fig { font-family:var(--mono); font-size:20px; font-weight:700; }
+  .ob-re-lbl { font-size:10px; text-transform:uppercase; letter-spacing:.3px;
+    color:var(--muted); font-weight:700; }
+  .ob-re-note { font-size:10px; color:var(--muted); margin-top:2px; }
+  .ob-check input { width:130px; font-family:var(--mono); text-align:right; }
+  .ob-actions { display:flex; gap:6px; align-items:center; padding-top:10px;
+    border-top:1px solid var(--border-light); margin-top:6px; }
+  .ob-msg { font-size:11px; padding:5px 9px; border:1px solid; border-radius:2px; margin:8px 0; }
+  .ob-msg.err { color:#a94442; background:var(--flash-err); border-color:#ebccd1; }
+  .ob-msg.ok  { color:#3c763d; background:var(--flash-ok); border-color:#d6e9c6; }
+</style>
+
+<div class="ob-back"></div>
+<div class="ob-wrap">
+
+{% if state.status == 'posted' and not editing %}
+{# Already converted. Grid does not layer a second set of openings on top of the
+   first — the way back is delete-and-redo, which is how the rest of Grid works. #}
+  <div class="ob-head">
+    <h1>Opening balances are posted</h1>
+    <div class="sub">These books were converted on <b>{{ state.conversion_date }}</b> —
+      {{ state.entry_count }} entries, all dated that day and referenced OPEN. They are the
+      first thing in the TRX ledger, which is where they belong.</div>
+  </div>
+  <div class="ob-foot">
+    <div class="ob-re">
+      <div>
+        <div class="ob-re-lbl">Opening retained earnings</div>
+        <div class="ob-re-fig">{{ posted_re_text }}</div>
+        <div class="ob-re-note">Computed from the balances entered, posted to RE.OB, and
+          carried to the balance sheet by the engine.</div>
+      </div>
+    </div>
+    <div class="ob-actions">
+      <a href="{{ url_for('opening_balances') }}?edit=1" class="btn btn-primary">Edit these opening balances</a>
+      <a href="{{ url_for('account_ledger', account_id=conv_account_id) }}" class="btn">Open the TRX conversion ledger</a>
+      <span class="spacer" style="flex:1"></span>
+      <form method="post" action="{{ url_for('opening_balances_delete') }}" style="display:inline"
+            onsubmit="return confirm('Delete the whole conversion?\n\nAll {{ state.entry_count }} opening entries go, including opening retained earnings. You can then enter them again from scratch.')">
+        <button type="submit" class="btn btn-danger">Delete the conversion and start again</button>
+      </form>
+    </div>
+  </div>
+{% else %}
+
+<form method="post" action="{{ url_for('opening_balances_post') }}" id="obForm">
+  <div class="ob-head">
+    <h1>{% if editing %}Edit opening balances{% else %}Opening balances{% endif %}</h1>
+    {% if editing %}
+    <div class="sub">The conversion as it was posted, ready to change. Retained earnings is
+      not shown as a line because Grid recomputes it from whatever you leave here. Posting
+      replaces the existing conversion in one step — the old entries go and the new ones
+      land together.</div>
+    <input type="hidden" name="replace" value="1">
+    {% else %}
+    <div class="sub">The client's closing balances from the prior year — everything that was
+      on the books the day before you take over. Enter the balance sheet; Grid works out
+      opening retained earnings and posts the conversion for you.</div>
+    {% endif %}
+    <div class="ob-date">
+      <label for="convdate">Balances at conversion date</label>
+      <input type="text" id="convdate" name="conversion_date" value="{{ conversion_date }}"
+             placeholder="yyyy-mm-dd">
+      <span style="font-size:10px;color:var(--muted)">
+        {% if default_date %}prior fiscal year end{% endif %}</span>
+    </div>
+  </div>
+
+  {% for e in result.errors if result %}
+  <div style="padding:0 14px"><div class="ob-msg err">{{ e }}</div></div>
+  {% endfor %}
+
+  <div class="ob-body">
+    <table class="ob">
+      <thead>
+        <tr>
+          <th class="ob-n"></th>
+          <th style="width:26%">Description</th>
+          <th style="width:16%">Account</th>
+          <th class="ob-amt" style="width:13%">Amount</th>
+          <th class="ob-side">Dr/Cr</th>
+          <th class="ob-flag"></th>
+        </tr>
+      </thead>
+      <tbody id="obRows">
+        {% for r in grid %}
+        <tr>
+          <td class="ob-n">{{ loop.index }}</td>
+          <td><input type="text" name="row_desc" value="{{ r.description }}" style="width:100%"></td>
+          <td><input type="text" name="row_acct" value="{{ r.account }}"
+                     style="width:100%;font-family:var(--mono);text-transform:uppercase"></td>
+          <td><input type="text" name="row_amt" value="{{ r.amount_text }}" class="ob-amt" style="width:100%"></td>
+          <td class="ob-side"></td>
+          <td class="ob-flag {% if r.error %}err{% endif %}">{{ r.error or r.warning }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <div style="padding:6px 0 10px">
+      <button type="button" class="btn btn-sm" onclick="addLines(5)">+ 5 more lines</button>
+      <span style="font-size:10px;color:var(--muted);margin-left:8px">
+        Amount: a plain number is a <b>debit</b>; put it in brackets or lead with a minus for a
+        <b>credit</b> — (1,000.00) or -1000.</span>
+    </div>
+    <div style="font-size:10px;color:var(--muted);padding-bottom:8px">
+      <kbd>↑</kbd><kbd>↓</kbd> row &nbsp; <kbd>←</kbd><kbd>→</kbd> column (at the end of what you
+      typed) &nbsp; <kbd>Enter</kbd> next row &nbsp; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> post &nbsp;
+      <kbd>F3</kbd> check &nbsp; <kbd>F2</kbd> leave &nbsp; rows are added as you reach the bottom
+    </div>
+  </div>
+
+  <div class="ob-foot">
+    <div class="ob-tot">
+      <span><b>Debits</b><i id="tDr">0.00</i></span>
+      <span><b>Credits</b><i id="tCr">0.00</i></span>
+      <span><b>Lines</b><i id="tN">0</i></span>
+    </div>
+
+    <div class="ob-re">
+      <div>
+        <div class="ob-re-lbl">Opening retained earnings</div>
+        <div class="ob-re-fig" id="reFig">0.00 <span style="font-size:12px">CR</span></div>
+        <div class="ob-re-note">Computed — never typed. Check it against the prior-year
+          statements before posting.</div>
+        {% if result and result.re_note %}
+        <div class="ob-re-note" style="max-width:420px;margin-top:4px;color:var(--accent)">
+          {{ result.re_note }}</div>
+        {% endif %}
+      </div>
+      <div class="ob-check">
+        <div class="ob-re-lbl" style="margin-bottom:3px">Per prior-year statements <span
+          style="font-weight:400;text-transform:none;letter-spacing:0">(optional)</span></div>
+        <input type="text" name="expected_re" value="{{ expected_re }}" placeholder="e.g. 35,065.00">
+        <div class="ob-re-note" id="reTie">Fill this in and Grid will refuse to post unless it ties.</div>
+      </div>
+    </div>
+
+    <div class="ob-actions">
+      <button type="submit" name="action" value="post" class="btn btn-primary">{% if editing %}Replace opening balances{% else %}Post opening balances{% endif %}</button>
+      <button type="submit" name="action" value="check" class="btn">Check without posting</button>
+      <span class="spacer" style="flex:1"></span>
+      <a href="/" class="btn btn-sm">Leave for now</a>
+    </div>
+  </div>
+</form>
+{% endif %}
+</div>
+
+<div id="obDD" style="display:none;position:absolute;z-index:200;background:var(--surface);
+     border:1px solid var(--border);box-shadow:0 6px 20px rgba(0,0,0,.25);max-height:220px;
+     overflow-y:auto;font-size:11px;min-width:340px"></div>
+<script>window.OB_ACCTS = {{ accounts|tojson }};</script>
+
+<script>
+(function () {
+  if (!document.getElementById('obForm')) return;   // the posted view has no grid
+  // Same money grammar the server uses (models.parse_amount): commas and $ are
+  // noise, brackets or a leading/trailing minus mean credit.
+  function cents(txt) {
+    let s = String(txt || '').trim().replace(/[,$\s]/g, '').replace('−', '-');
+    if (!s) return 0;
+    let neg = false;
+    if (s.startsWith('(') && s.endsWith(')')) { neg = true; s = s.slice(1, -1); }
+    if (s.startsWith('-')) { neg = !neg; s = s.slice(1); }
+    if (s.endsWith('-'))   { neg = !neg; s = s.slice(0, -1); }
+    if (!/^\d*\.?\d*$/.test(s) || s === '' || s === '.') return NaN;
+    const v = Math.round(parseFloat(s) * 100);
+    return neg ? -v : v;
+  }
+  function fmt(c) {
+    const n = Math.abs(c);
+    return (Math.floor(n / 100)).toLocaleString('en-US') + '.' + String(n % 100).padStart(2, '0');
+  }
+  const CR = ' <span style="font-size:12px">CR</span>', DR = ' <span style="font-size:12px">DR</span>';
+
+  function recalc() {
+    let dr = 0, cr = 0, n = 0;
+    document.querySelectorAll('#obRows tr').forEach(tr => {
+      const amt = tr.querySelector('input[name=row_amt]');
+      const acct = tr.querySelector('input[name=row_acct]');
+      const side = tr.querySelector('.ob-side');
+      const c = cents(amt.value);
+      if (isNaN(c)) { side.textContent = '?'; side.style.color = '#b91c1c'; return; }
+      side.style.color = '';
+      side.textContent = c > 0 ? 'DR' : (c < 0 ? 'CR' : '');
+      if (c > 0) dr += c; else if (c < 0) cr -= c;
+      if (c || acct.value.trim()) n++;
+    });
+    document.getElementById('tDr').textContent = fmt(dr);
+    document.getElementById('tCr').textContent = fmt(cr);
+    document.getElementById('tN').textContent = n;
+    // The residual IS opening retained earnings: whatever makes the entry balance.
+    const re = dr - cr;
+    document.getElementById('reFig').innerHTML = fmt(re) + (re < 0 ? DR : CR);
+    const exp = document.querySelector('input[name=expected_re]');
+    const tie = document.getElementById('reTie');
+    const e = cents(exp.value);
+    if (!exp.value.trim() || isNaN(e)) {
+      tie.textContent = 'Fill this in and Grid will refuse to post unless it ties.';
+      tie.style.color = '';
+    } else if (e === re) {
+      tie.textContent = '✓ ties to the prior-year statements';
+      tie.style.color = '#3c763d';
+    } else {
+      tie.textContent = 'off by ' + fmt(re - e) + ' — something above is wrong or missing';
+      tie.style.color = '#b91c1c';
+    }
+  }
+
+  window.addLines = function (k) {
+    const body = document.getElementById('obRows');
+    const n = body.rows.length;
+    for (let i = 0; i < k; i++) {
+      const tr = body.insertRow();
+      tr.innerHTML =
+        '<td class="ob-n">' + (n + i + 1) + '</td>' +
+        '<td><input type="text" name="row_desc" style="width:100%"></td>' +
+        '<td><input type="text" name="row_acct" style="width:100%;' +
+        'font-family:var(--mono);text-transform:uppercase"></td>' +
+        '<td><input type="text" name="row_amt" class="ob-amt" style="width:100%"></td>' +
+        '<td class="ob-side"></td><td class="ob-flag"></td>';
+    }
+    recalc();
+  };
+
+  document.addEventListener('input', recalc);
+  recalc();
+
+  // ── Keyboard navigation ────────────────────────────────────────────────────
+  // Same grammar as the ledger entry row (v97): arrows move the CARET inside a
+  // field and only jump to the next cell at the field's edge, so you can still
+  // fix a typo mid-word. Up/Down move by row, which is what makes a 40-line
+  // trial balance keyable without ever reaching for the mouse. The account
+  // picker is ours rather than a native datalist precisely so Up/Down can mean
+  // "row" here and "suggestion" only while the list is open.
+  const COLS = ['row_desc', 'row_acct', 'row_amt'];
+  const dd = document.getElementById('obDD');
+  let ddHi = -1, ddFor = null;
+
+  function atEnd(i)   { return i.selectionStart === i.value.length && i.selectionStart === i.selectionEnd; }
+  function atStart(i) { return i.selectionStart === 0 && i.selectionEnd === 0; }
+  function rowsAll()  { return Array.from(document.querySelectorAll('#obRows tr')); }
+  function cellAt(r, c) {
+    let rs = rowsAll();
+    if (r < 0) return null;
+    if (r >= rs.length) {
+      addLines(r - rs.length + 1);        // grow as you reach the bottom
+      rs = rowsAll();
+      if (r >= rs.length) return null;    // adding failed — never loop on it
+    }
+    return rs[r].querySelector('input[name=' + COLS[c] + ']');
+  }
+  function where(inp) {
+    const tr = inp.closest('tr');
+    return {r: rowsAll().indexOf(tr), c: COLS.indexOf(inp.name)};
+  }
+  function go(inp, dr, dc) {
+    const p = where(inp);
+    if (p.r < 0 || p.c < 0) return;
+    let r = p.r + dr, c = p.c + dc;
+    if (c < 0)             { c = COLS.length - 1; r -= 1; }   // off the left edge → end of the row above
+    if (c >= COLS.length)  { c = 0;               r += 1; }   // off the right edge → start of the row below
+    const t = cellAt(r, c);
+    if (t) { t.focus(); t.select(); hideDD(); }
+  }
+
+  // ── the account picker ──
+  function hideDD() { dd.style.display = 'none'; ddHi = -1; ddFor = null; }
+  function ddOpen() { return dd.style.display === 'block'; }
+  function paint() {
+    Array.from(dd.children).forEach((el, i) =>
+      el.style.background = (i === ddHi ? 'var(--sel)' : ''));
+  }
+  function showDD(inp) {
+    const q = inp.value.trim().toUpperCase();
+    const hits = (window.OB_ACCTS || []).filter(a =>
+      !q || a.name.toUpperCase().indexOf(q) >= 0 ||
+      (a.description || '').toUpperCase().indexOf(q) >= 0).slice(0, 40);
+    if (!hits.length) { hideDD(); return; }
+    dd.innerHTML = '';
+    hits.forEach(a => {
+      const el = document.createElement('div');
+      el.style.cssText = 'padding:3px 8px;cursor:pointer;display:flex;gap:8px';
+      el.dataset.n = a.name;
+      el.innerHTML = '<b style="font-family:var(--mono);min-width:88px">' + a.name +
+                     '</b><span style="color:var(--muted);overflow-wrap:anywhere">' +
+                     (a.description || '') + '</span>';
+      el.addEventListener('mousedown', function (ev) {
+        ev.preventDefault(); inp.value = a.name; hideDD(); recalc(); go(inp, 0, +1);
+      });
+      dd.appendChild(el);
+    });
+    const box = inp.getBoundingClientRect();
+    dd.style.left = Math.max(6, Math.min(box.left + window.scrollX,
+                    window.innerWidth - 350)) + 'px';
+    dd.style.top = (box.bottom + window.scrollY) + 'px';
+    dd.style.display = 'block';
+    ddHi = 0; ddFor = inp; paint();
+  }
+
+  document.addEventListener('keydown', function (e) {
+    const inp = e.target;
+    if (!inp || inp.tagName !== 'INPUT' || COLS.indexOf(inp.name) < 0) return;
+    const isAcct = inp.name === 'row_acct';
+
+    // While the picker is open it owns Up/Down/Enter — exactly the ledger's rule.
+    if (isAcct && ddOpen() && ddFor === inp) {
+      const its = dd.children;
+      if (e.key === 'ArrowDown') { e.preventDefault(); ddHi = Math.min(ddHi + 1, its.length - 1); paint(); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); ddHi = Math.max(ddHi - 1, 0); paint(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); hideDD(); return; }
+      if ((e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight') && ddHi >= 0) {
+        e.preventDefault();
+        inp.value = its[ddHi].dataset.n; hideDD(); recalc();
+        go(inp, e.key === 'Enter' ? 1 : 0, e.key === 'Enter' ? 0 : +1);
+        return;
+      }
+    }
+
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {       // post from anywhere
+      e.preventDefault();
+      document.querySelector('button[name=action][value=post]').click();
+      return;
+    }
+    if (e.key === 'Enter')      { e.preventDefault(); go(inp, +1, 0); return; }
+    if (e.key === 'ArrowDown')  { e.preventDefault(); go(inp, +1, 0); return; }
+    if (e.key === 'ArrowUp')    { e.preventDefault(); go(inp, -1, 0); return; }
+    if (e.key === 'ArrowRight' && atEnd(inp))  { e.preventDefault(); go(inp, 0, +1); return; }
+    if (e.key === 'ArrowLeft'  && atStart(inp)) { e.preventDefault(); go(inp, 0, -1); return; }
+  });
+
+  document.addEventListener('input', function (e) {
+    if (e.target && e.target.name === 'row_acct') showDD(e.target);
+  });
+  document.addEventListener('focusout', function (e) {
+    if (e.target && e.target.name === 'row_acct') setTimeout(hideDD, 120);
+  });
+
+  // Enter in the header fields must NOT submit the form. The first submit button
+  // is Post, so a reflexive Enter after typing the check figure would have posted
+  // the conversion — the one action on this screen that should never be reflexive.
+  ['convdate', 'expected_re'].forEach(function (id) {
+    const el = document.getElementById(id) || document.querySelector('[name=' + id + ']');
+    if (!el) return;
+    el.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const t = document.querySelector('#obRows input[name=row_desc]');
+      if (t) { t.focus(); t.select(); }
+    });
+  });
+
+  // Screen-level keys, matching the rest of Grid: F2 goes back, F3 is the
+  // non-destructive look.
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F2') { e.preventDefault(); location.href = '/'; }
+    if (e.key === 'F3') {
+      e.preventDefault();
+      const b = document.querySelector('button[name=action][value=check]');
+      if (b) b.click();
+    }
+  });
+
+  // Land on the first cell so typing can start immediately.
+  const first = document.querySelector('#obRows input[name=row_desc]');
+  if (first) first.focus();
+
+  // Posting a conversion is the one irreversible-feeling step in the module, so
+  // it names the figure out loud first — nobody posts opening RE without seeing it.
+  document.getElementById('obForm').addEventListener('submit', function (e) {
+    const btn = e.submitter;
+    if (!btn || btn.value !== 'post') return;
+    const fig = document.getElementById('reFig').textContent.trim();
+    if (!confirm('Post opening balances?\n\nOpening retained earnings will be posted as '
+                 + fig + '.\n\nCheck that against the prior-year statements before you continue.')) {
+      e.preventDefault();
+    }
+  });
+})();
+</script>
+{% endblock %}

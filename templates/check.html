@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Check Books{% endblock %}
+{% block content %}
+<style>
+  .ck { max-width: 780px; }
+  .ck h1 { font-size: 15px; margin: 0 0 2px; font-weight: 700; }
+  .ck .verdict { font-size: 13px; margin-bottom: 14px; }
+  .ck .verdict.bad  { color: #c33; font-weight: 700; }
+  .ck .verdict.work { color: var(--text); }
+  .ck .verdict.good { color: #4a7; }
+  .ck table { width: 100%; border-collapse: collapse; }
+  .ck td { padding: 5px 8px; border-bottom: 1px solid var(--border-light);
+           vertical-align: top; }
+  .ck td.st { width: 58px; font-family: var(--mono); font-size: 10px;
+              letter-spacing: .5px; white-space: nowrap; }
+  .ck td.nm { width: 34%; }
+  .ck td.dt { color: var(--muted); }
+  .ck tr.error   td.st { color: #c33; font-weight: 700; }
+  .ck tr.error   td.nm { font-weight: 700; }
+  .ck tr.attention td.st { color: #b7791f; }
+  .ck tr.ok      td.st { color: #4a7; }
+</style>
+<div class="ck">
+  <h1>Check Books — {{ company }}</h1>
+  <div class="verdict {{ 'bad' if not result.ok else ('work' if result.attention else 'good') }}">
+    {{ result.summary }}
+  </div>
+  <table>
+    {% for c in result.checks %}
+    <tr class="{{ c.status }}">
+      <td class="st">{{ {'ok':'OK','attention':'TO DO','error':'WRONG'}[c.status] }}</td>
+      <td class="nm">{{ c.name }}</td>
+      <td class="dt">{{ c.detail }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

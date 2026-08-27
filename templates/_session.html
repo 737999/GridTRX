@@ -1,0 +1,145 @@
+{# The session lifeline, shared by every screen — including the library,
+   which is its own standalone page. ONE copy: the stale-tab marker, the
+   "Grid has stopped" curtain, the heartbeat, and the goodbye beacon that
+   turns shutting the window into a proper close. Included right after
+   <body> so the fetch wrapper is installed before any page script runs. #}
+  <script>
+  // ── v114 stale-tab guard (ported from Grid-XB AUD-1) ────────────────────────
+  // Every page remembers the books file it was rendered from. Two windows on one
+  // Grid can drift: window A still shows one client while window B closes it and
+  // opens another — a post from A would land in the second client's books.db with A's account
+  // ids. So every AJAX call carries the file, and the server refuses writes that
+  // do not match what is open now. One global wrapper; no per-callsite wiring.
+  window.GRID_FILE = {{ (g.get('grid_file') or '')|tojson }};
+  (function () {
+    const _fetch = window.fetch;
+    window.fetch = function (url, opts) {
+      opts = opts || {};
+      opts.headers = Object.assign({'X-Grid-File': window.GRID_FILE}, opts.headers || {});
+      const call = _fetch(url, opts);
+      // v115 — the opening-balance soft lock. The server refuses any write that
+      // touches the conversion until the operator has been asked; here is where
+      // the asking happens, once, for every JSON write in the app. Answer yes
+      // and the same call goes again with the confirmation attached.
+      return call.then(function (res) {
+        if (!res || !res.ok) return res;
+        const copy = res.clone();
+        return copy.json().then(function (body) {
+          if (!body || typeof body.error !== 'string' || !body.error.startsWith('OPENING:')) return res;
+          if (!confirm(body.error.replace(/^OPENING:\s*/, '') +
+                       '\n\nAre you sure you want to change it?')) return res;
+          const again = Object.assign({}, opts);
+          try {
+            const b = JSON.parse(again.body || '{}');
+            b.confirm_opening = true;
+            again.body = JSON.stringify(b);
+          } catch (e) { return res; }
+          return _fetch(url, again);
+        }).catch(function () { return res; });   // not JSON — nothing to do
+      });
+    };
+    // Plain form POSTs carry no headers — Grid posts most of its data entry this
+    // way (quick entry, import, settings), so stamp the file in as a field.
+    document.addEventListener('submit', function (e) {
+      const f = e.target;
+      if (!f || f.tagName !== 'FORM') return;
+      if ((f.method || 'get').toLowerCase() !== 'post') return;
+      if (f.querySelector('input[name="_grid_file"]')) return;
+      const h = document.createElement('input');
+      h.type = 'hidden'; h.name = '_grid_file'; h.value = window.GRID_FILE;
+      f.appendChild(h);
+    }, true);
+  })();
+  </script>
+  <!-- ── Closing Grid: the LAP formal close, adapted to a window that has an X ──
+       A web page cannot refuse its own X, so the X is made to DO the formal
+       close instead: the window and the server live and die together, and the
+       books are never left half-open. -->
+  <div id="gridCurtain" style="display:none;position:fixed;inset:0;z-index:9999;
+       background:#1b1f23;color:#d8dde2;font-family:system-ui,-apple-system,sans-serif;
+       align-items:center;justify-content:center;text-align:center">
+    <div>
+      <div style="font-size:26px;letter-spacing:2px;margin-bottom:10px">GRID</div>
+      <div id="gridCurtainMsg" style="font-size:14px;margin-bottom:6px"></div>
+      <div style="font-size:11.5px;color:#8b949e">Your books are closed and safe.
+        You can close this window.</div>
+      <div style="font-size:11.5px;color:#8b949e;margin-top:14px">Run
+        <code style="color:#b9c2cc">run.py</code> to start Grid again.</div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    const BOOKS_OPEN = {{ 'true' if g.get('company_name') else 'false' }};
+    let quitting = false, touched = 0, misses = 0;
+
+    // Any click/typing means a navigation about to happen came from INSIDE
+    // Grid — that must never raise the "are you sure" prompt.
+    ['click', 'submit', 'keydown'].forEach(ev =>
+      document.addEventListener(ev, () => touched = Date.now(), true));
+
+    // The browser owns this dialog and its wording; all we control is whether
+    // it appears. Leaving is still allowed — it just isn't accidental.
+    window.addEventListener('beforeunload', function (e) {
+      if (quitting || !BOOKS_OPEN) return;
+      if (Date.now() - touched < 5000) return;      // an in-app navigation
+      e.preventDefault();
+      e.returnValue = '';
+    });
+
+    // A window going away starts a short grace on the server. An ordinary link
+    // click cancels it (the next page checks in); a real close does not.
+    //
+    // v116 — but pagehide does not only mean "the operator closed this". The
+    // browser also fires it when it DISCARDS a background tab to reclaim memory,
+    // and Grid would then shut down while the operator was simply working in
+    // another application. So report how long this page had been hidden: a window
+    // you were using when it went away was visible a moment ago, while a tab the
+    // browser reclaimed had been hidden for minutes. The server honours the first
+    // and ignores the second.
+    let hiddenSince = document.visibilityState === 'hidden' ? Date.now() : 0;
+    document.addEventListener('visibilitychange', function () {
+      hiddenSince = document.visibilityState === 'hidden' ? Date.now() : 0;
+    });
+    window.addEventListener('pagehide', function () {
+      if (quitting || !navigator.sendBeacon) return;
+      const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
+      navigator.sendBeacon('/api/window-gone', String(hiddenFor));
+    });
+
+    function curtain(msg) {
+      document.getElementById('gridCurtainMsg').textContent = msg;
+      document.getElementById('gridCurtain').style.display = 'flex';
+    }
+
+    // Server gone? Say so, instead of sitting here looking alive.
+    function beat() {
+      if (quitting) return;
+      fetch('/api/alive', {cache: 'no-store'})
+        .then(r => { if (!r.ok) throw 0; misses = 0; })
+        .catch(() => { if (++misses >= 2) curtain('Grid has stopped.'); });
+    }
+    setInterval(beat, 5000);
+
+    // v116 — the interval alone is not enough. Every modern browser throttles
+    // timers in a hidden tab or window (Firefox, Chromium-family and Safari all
+    // do it), so working in another application for a while looked exactly like
+    // a closed window and Grid shut itself down. Check in the moment this window
+    // comes back — and on the way out — so the server sees a live window on both
+    // edges instead of inferring a dead one from silence.
+    document.addEventListener('visibilitychange', beat);
+    window.addEventListener('pageshow', beat);
+    window.addEventListener('focus', beat);
+
+    // Still here, still callable — but nothing in the topbar links to it any
+    // more (v114). Stopping Grid is now "shut the window", which the pagehide
+    // beacon above turns into the same formal close.
+    window.gridQuit = function () {
+      if (quitting) return;
+      if (BOOKS_OPEN && !confirm('Close the books and stop Grid?')) return;
+      quitting = true;
+      fetch('/api/quit', {method: 'POST'}).catch(() => {});
+      curtain('Books closed. Grid has stopped.');
+      setTimeout(() => { try { window.close(); } catch (e) {} }, 1200);
+    };
+  })();
+  </script>

@@ -1,0 +1,316 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Edit ' + entry.ref if editing else 'New Adjusting Entry' }}{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>
+  <a href="{{ url_for('account_ledger', account_id=account.id) }}">{{ account.description or account.name }}</a>
+  <span class="sep">▸</span>{{ entry.ref if editing else 'New entry' }}</div>
+{% endblock %}
+{% block content %}
+<style>
+  .aje-panel { max-width:760px; background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; padding:0 0 8px; margin-top:8px; }
+  .aje-top { padding:12px 14px 8px; border-bottom:1px solid var(--border-light); }
+  .aje-head { display:grid; grid-template-columns:130px 130px 1fr; gap:10px 14px; }
+  .aje-panel table { width:100%; border-collapse:collapse; }
+  .aje-panel th { text-align:left; font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.3px; color:var(--muted); padding:6px 6px 3px; }
+  .aje-panel td { padding:1px 6px; }
+  .aje-n { width:26px; color:var(--faint); font-size:10px; text-align:right; font-family:var(--mono); }
+  .aje-amt { font-family:var(--mono); text-align:right; }
+  .aje-side { width:34px; font-size:9px; font-weight:700; color:var(--muted); text-align:center; }
+  .aje-flag { font-size:10px; color:var(--muted); }
+  .aje-flag.err { color:var(--neg); }
+  .aje-tot { display:flex; gap:18px; align-items:baseline; padding:8px 14px;
+    border-top:1px solid var(--border-light); font-size:12px; }
+  .aje-tot b { font-family:var(--mono); font-size:13px; }
+  .aje-off { color:var(--neg); font-weight:700; }
+  .aje-ok { color:var(--muted); }
+  .aje-count { font-size:10px; color:var(--muted); }
+  .aje-count.over { color:var(--neg); font-weight:700; }
+  .aje-keys { font-size:10px; color:var(--muted); padding:2px 14px 8px; }
+</style>
+
+<h1>{{ 'Edit ' + entry.ref if editing else 'New Adjusting Entry' }}</h1>
+<p class="subtitle">{{ account.description or account.name }} — one description, posted on every line.</p>
+
+<form method="post" class="aje-panel" id="ajeForm">
+  <input type="hidden" name="replace_ref" value="{{ replace_ref or '' }}">
+  <div class="aje-top">
+    <div class="aje-head">
+      <div class="form-group" style="margin:0">
+        <label>Ref #</label>
+        <input type="text" name="ref" id="ref" value="{{ entry.ref }}"
+               style="font-family:var(--mono);text-transform:uppercase">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Date</label>
+        <input type="text" name="entry_date" id="entry_date" value="{{ entry.date }}"
+               placeholder="yyyy-mm-dd" style="font-family:var(--mono)">
+      </div>
+      <div class="form-group" style="margin:0">
+        <label>Description <span class="aje-count" id="dcount"></span></label>
+        <input type="text" name="description" id="description" value="{{ entry.description }}"
+               maxlength="{{ desc_max }}" autofocus
+               placeholder="e.g. Rcd 2026 tax provision">
+      </div>
+    </div>
+  </div>
+
+  <table>
+    <colgroup><col style="width:26px"><col style="width:190px"><col style="width:130px"><col style="width:34px"><col></colgroup>
+    <thead><tr><th></th><th>Account</th><th style="text-align:right">Amount</th><th></th><th></th></tr></thead>
+    <tbody id="ajeRows">
+      {% for r in entry.rows %}
+      <tr>
+        <td class="aje-n">{{ loop.index }}</td>
+        <td><input type="text" name="row_acct" value="{{ r.account }}"
+                   style="width:100%;font-family:var(--mono);text-transform:uppercase"></td>
+        <td><input type="text" name="row_amt" class="aje-amt" style="width:100%"
+                   value="{{ '%.2f'|format(r.amount / 100.0) if r.amount else '' }}"></td>
+        <td class="aje-side"></td>
+        <td class="aje-flag"></td>
+      </tr>
+      {% endfor %}
+      {% for _ in range(6 if not entry.rows else 2) %}
+      <tr>
+        <td class="aje-n">{{ entry.rows|length + loop.index }}</td>
+        <td><input type="text" name="row_acct" style="width:100%;font-family:var(--mono);text-transform:uppercase"></td>
+        <td><input type="text" name="row_amt" class="aje-amt" style="width:100%"></td>
+        <td class="aje-side"></td>
+        <td class="aje-flag"></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div style="padding:4px 14px 0">
+    <button type="button" class="btn btn-sm" onclick="addLines(3)">+ 3 more lines</button>
+    <span style="font-size:10px;color:var(--muted);margin-left:8px">
+      A plain number is a <b>debit</b>; brackets or a leading minus is a <b>credit</b> — (80.00) or -80.</span>
+  </div>
+
+  <div class="aje-tot">
+    <span>Debits <b id="tDr">—</b></span>
+    <span>Credits <b id="tCr">—</b></span>
+    <span id="tOut" class="aje-ok">in balance</span>
+    <span style="flex:1"></span>
+    <button type="submit" class="btn btn-primary" id="postBtn">{{ 'Save entry' if editing else 'Post entry' }}</button>
+    <a class="btn" href="{{ url_for('account_ledger', account_id=account.id) }}">Cancel</a>
+  </div>
+  <div class="aje-keys">
+    <kbd>↑</kbd><kbd>↓</kbd> row &nbsp; <kbd>←</kbd><kbd>→</kbd> column (at the end of what you typed)
+    &nbsp; <kbd>Enter</kbd> next row &nbsp; <kbd>Ctrl</kbd>+<kbd>Enter</kbd> post &nbsp; <kbd>F2</kbd> back
+  </div>
+</form>
+
+{% if editing %}
+<form method="post" action="{{ url_for('aje_delete', journal_id=account.id) }}" style="margin-top:10px;max-width:760px">
+  <input type="hidden" name="ref" value="{{ entry.ref }}">
+  <button type="submit" class="btn btn-sm btn-danger"
+          onclick="return confirm('Delete {{ entry.ref }} entirely? Every line of it goes.')">Delete this entry</button>
+</form>
+{% endif %}
+
+<div id="ajeDD" style="display:none;position:absolute;z-index:200;background:var(--surface);
+  border:1px solid var(--border);border-radius:3px;box-shadow:0 4px 14px rgba(0,0,0,.16);
+  max-height:260px;overflow:auto;font-size:11.5px;min-width:340px"></div>
+
+<script>window.AJE_ACCTS = {{ accounts|map(attribute='name')|list|tojson }};</script>
+<script>window.AJE_DESCS = {{ accounts|map(attribute='description')|list|tojson }};</script>
+<script>
+(function () {
+  const COLS = ['row_acct', 'row_amt'];
+  const DESC_MAX = {{ desc_max }};
+  const dd = document.getElementById('ajeDD');
+  let ddHi = -1, ddFor = null;
+
+  function rowsAll() { return Array.from(document.querySelectorAll('#ajeRows tr')); }
+  function atEnd(i)   { return i.selectionStart === i.value.length && i.selectionStart === i.selectionEnd; }
+  function atStart(i) { return i.selectionStart === 0 && i.selectionEnd === 0; }
+
+  window.addLines = function (n) {
+    const body = document.getElementById('ajeRows');
+    for (let k = 0; k < n; k++) {
+      const tr = document.createElement('tr');
+      tr.innerHTML = '<td class="aje-n"></td>' +
+        '<td><input type="text" name="row_acct" style="width:100%;font-family:var(--mono);text-transform:uppercase"></td>' +
+        '<td><input type="text" name="row_amt" class="aje-amt" style="width:100%"></td>' +
+        '<td class="aje-side"></td><td class="aje-flag"></td>';
+      body.appendChild(tr);
+    }
+    renumber();
+  };
+  function renumber() {
+    rowsAll().forEach((tr, i) => { tr.querySelector('.aje-n').textContent = i + 1; });
+  }
+
+  function cellAt(r, c) {
+    let rs = rowsAll();
+    if (r < 0) return null;
+    if (r >= rs.length) {
+      addLines(r - rs.length + 1);          // grow as you reach the bottom
+      rs = rowsAll();
+      if (r >= rs.length) return null;      // adding failed — never loop on it
+    }
+    return rs[r].querySelector('input[name=' + COLS[c] + ']');
+  }
+  function where(inp) {
+    return {r: rowsAll().indexOf(inp.closest('tr')), c: COLS.indexOf(inp.name)};
+  }
+  function go(inp, dr, dc) {
+    const p = where(inp);
+    if (p.r < 0 || p.c < 0) return;
+    let r = p.r + dr, c = p.c + dc;
+    if (c < 0)            { c = COLS.length - 1; r -= 1; }
+    if (c >= COLS.length) { c = 0;               r += 1; }
+    const t = cellAt(r, c);
+    if (t) { t.focus(); t.select(); hideDD(); }
+  }
+
+  // ── amounts and the running totals ──
+  function cents(txt) {
+    let t = (txt || '').trim();
+    if (!t) return 0;
+    let neg = false;
+    if (/^\(.*\)$/.test(t)) { neg = true; t = t.slice(1, -1); }
+    t = t.replace(/[$,\s]/g, '');
+    if (t.startsWith('-')) { neg = true; t = t.slice(1); }
+    if (!/^\d*\.?\d*$/.test(t) || t === '' || t === '.') return NaN;
+    const v = Math.round(parseFloat(t) * 100);
+    return neg ? -v : v;
+  }
+  function fmt(c) {
+    const s = (Math.abs(c) / 100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return c < 0 ? '(' + s + ')' : s;
+  }
+  function recalc() {
+    let dr = 0, cr = 0, bad = false;
+    rowsAll().forEach(tr => {
+      const a = tr.querySelector('input[name=row_acct]');
+      const m = tr.querySelector('input[name=row_amt]');
+      const side = tr.querySelector('.aje-side');
+      const flag = tr.querySelector('.aje-flag');
+      const v = cents(m.value);
+      side.textContent = '';
+      flag.textContent = ''; flag.classList.remove('err');
+      if (isNaN(v)) { flag.textContent = 'not an amount'; flag.classList.add('err'); bad = true; return; }
+      if (v > 0) { dr += v; side.textContent = 'DR'; }
+      if (v < 0) { cr -= v; side.textContent = 'CR'; }
+      if (a.value.trim() && !v) { flag.textContent = 'no amount'; }
+      if (!a.value.trim() && v) { flag.textContent = 'no account'; flag.classList.add('err'); }
+    });
+    document.getElementById('tDr').textContent = dr ? fmt(dr) : '—';
+    document.getElementById('tCr').textContent = cr ? fmt(cr) : '—';
+    const out = document.getElementById('tOut');
+    const diff = dr - cr;
+    if (bad)        { out.textContent = 'fix the amounts'; out.className = 'aje-off'; }
+    else if (diff)  { out.textContent = 'out of balance by ' + fmt(Math.abs(diff)); out.className = 'aje-off'; }
+    else if (dr)    { out.textContent = 'in balance'; out.className = 'aje-ok'; }
+    else            { out.textContent = ''; out.className = 'aje-ok'; }
+  }
+
+  // ── the description counter: it prints on every line, so its length matters ──
+  const desc = document.getElementById('description');
+  function countDesc() {
+    const n = desc.value.length;
+    const el = document.getElementById('dcount');
+    el.textContent = n + '/' + DESC_MAX;
+    el.classList.toggle('over', n >= DESC_MAX);
+  }
+  desc.addEventListener('input', countDesc);
+  countDesc();
+
+  // ── the account picker (Grid's own; a native datalist would eat Up/Down) ──
+  function hideDD() { dd.style.display = 'none'; ddHi = -1; ddFor = null; }
+  function ddOpen() { return dd.style.display === 'block'; }
+  function paint() {
+    Array.from(dd.children).forEach((el, i) => el.style.background = (i === ddHi ? 'var(--sel)' : ''));
+  }
+  function showDD(inp) {
+    const q = inp.value.trim().toUpperCase();
+    const names = window.AJE_ACCTS || [], descs = window.AJE_DESCS || [];
+    const hits = [];
+    for (let i = 0; i < names.length && hits.length < 40; i++) {
+      const n = names[i], d = descs[i] || '';
+      if (!q || n.toUpperCase().indexOf(q) >= 0 || d.toUpperCase().indexOf(q) >= 0) hits.push([n, d]);
+    }
+    if (!hits.length) { hideDD(); return; }
+    dd.innerHTML = '';
+    hits.forEach(function (h) {
+      const el = document.createElement('div');
+      el.style.cssText = 'padding:3px 8px;cursor:pointer;display:flex;gap:8px';
+      el.dataset.n = h[0];
+      el.innerHTML = '<b style="font-family:var(--mono);min-width:88px">' + h[0] +
+                     '</b><span style="color:var(--muted);overflow-wrap:anywhere">' + h[1] + '</span>';
+      el.addEventListener('mousedown', function (ev) {
+        ev.preventDefault(); inp.value = h[0]; hideDD(); recalc(); go(inp, 0, +1);
+      });
+      dd.appendChild(el);
+    });
+    const box = inp.getBoundingClientRect();
+    dd.style.left = Math.max(6, Math.min(box.left + window.scrollX, window.innerWidth - 360)) + 'px';
+    dd.style.top = (box.bottom + window.scrollY) + 'px';
+    dd.style.display = 'block';
+    ddHi = 0; ddFor = inp; paint();
+  }
+
+  document.addEventListener('keydown', function (e) {
+    const inp = e.target;
+    if (!inp || inp.tagName !== 'INPUT' || COLS.indexOf(inp.name) < 0) return;
+    const isAcct = inp.name === 'row_acct';
+
+    if (isAcct && ddOpen() && ddFor === inp) {
+      const its = dd.children;
+      if (e.key === 'ArrowDown') { e.preventDefault(); ddHi = Math.min(ddHi + 1, its.length - 1); paint(); return; }
+      if (e.key === 'ArrowUp')   { e.preventDefault(); ddHi = Math.max(ddHi - 1, 0); paint(); return; }
+      if (e.key === 'Escape')    { e.preventDefault(); hideDD(); return; }
+      if ((e.key === 'Enter' || e.key === 'Tab' || e.key === 'ArrowRight') && ddHi >= 0) {
+        e.preventDefault();
+        inp.value = its[ddHi].dataset.n; hideDD(); recalc();
+        go(inp, e.key === 'Enter' ? 1 : 0, e.key === 'Enter' ? 0 : +1);
+        return;
+      }
+    }
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault(); document.getElementById('postBtn').click(); return;
+    }
+    if (e.key === 'Enter')     { e.preventDefault(); go(inp, +1, 0); return; }
+    if (e.key === 'ArrowDown') { e.preventDefault(); go(inp, +1, 0); return; }
+    if (e.key === 'ArrowUp')   { e.preventDefault(); go(inp, -1, 0); return; }
+    if (e.key === 'ArrowRight' && atEnd(inp))  { e.preventDefault(); go(inp, 0, +1); return; }
+    if (e.key === 'ArrowLeft'  && atStart(inp)) { e.preventDefault(); go(inp, 0, -1); return; }
+  });
+
+  document.addEventListener('input', function (e) {
+    if (!e.target) return;
+    if (e.target.name === 'row_acct') showDD(e.target);
+    if (e.target.name === 'row_acct' || e.target.name === 'row_amt') recalc();
+  });
+  document.addEventListener('focusout', function (e) {
+    if (e.target && e.target.name === 'row_acct') setTimeout(hideDD, 120);
+  });
+
+  // Enter in a header field must NOT submit: the first submit button is Post,
+  // so a reflexive Enter after typing the description would post the entry.
+  ['ref', 'entry_date', 'description'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const t = document.querySelector('#ajeRows input[name=row_acct]');
+      if (t) { t.focus(); t.select(); }
+    });
+  });
+
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'F2' && !e.target.matches('input')) {
+      e.preventDefault();
+      location.href = '{{ url_for("account_ledger", account_id=account.id) }}';
+    }
+  });
+
+  recalc();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Grid — {{ client }} is locked</title>
+  <style>
+    :root {
+      --bg: #fafaf8; --surface: #ffffff; --border: #d4d0c8;
+      --text: #1a1a18; --muted: #6b6860; --accent: #2c5282;
+      --warn-bg: #fffbea; --warn-border: #e0c56e; --warn-text: #6b5518;
+      --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'Consolas', 'SF Mono', 'Menlo', monospace;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:var(--sans); font-size:14px; color:var(--text); background:var(--bg); }
+
+    .header { background:#2d3748; color:#e2e8f0; padding:16px 24px; display:flex;
+      align-items:center; gap:12px; }
+    .header h1 { font-size:18px; font-weight:700; letter-spacing:1px; color:#90cdf4; }
+    .header .tag { font-size:12px; color:#a0aec0; margin-left:8px; }
+
+    .container { max-width:640px; margin:0 auto; padding:32px 24px; }
+    .card { background:var(--surface); border:1px solid var(--border); border-radius:6px;
+      padding:28px; }
+
+    .client { font-family:var(--mono); font-size:12px; color:var(--muted);
+      text-transform:uppercase; letter-spacing:1px; margin-bottom:10px; }
+    h2 { font-size:19px; line-height:1.35; margin-bottom:14px; font-weight:650; }
+    p.detail { color:var(--text); line-height:1.6; margin-bottom:16px; }
+
+    .holder { font-family:var(--mono); font-size:12px; color:var(--muted);
+      background:#f4f3f0; border:1px solid var(--border); border-radius:4px;
+      padding:8px 12px; margin-bottom:18px; word-break:break-all; }
+
+    .warn { background:var(--warn-bg); border:1px solid var(--warn-border);
+      color:var(--warn-text); border-radius:4px; padding:10px 14px; margin-bottom:18px;
+      line-height:1.5; font-size:13px; }
+
+    .door { display:block; width:100%; text-align:center; text-decoration:none;
+      background:var(--accent); color:#fff; border:none; border-radius:5px;
+      padding:16px 20px; font-family:var(--sans); font-size:15px; font-weight:600;
+      cursor:pointer; line-height:1.4; }
+    .door:hover { background:#1e3f66; }
+    .door .key { display:inline-block; font-family:var(--mono); font-size:12px;
+      background:rgba(255,255,255,.18); border:1px solid rgba(255,255,255,.35);
+      border-radius:3px; padding:1px 6px; margin-right:8px; }
+
+    .after { margin-top:16px; display:flex; justify-content:space-between;
+      align-items:center; gap:12px; flex-wrap:wrap; }
+    .after a { color:var(--accent); font-size:13px; text-decoration:none; }
+    .after a:hover { text-decoration:underline; }
+    .lockfile { font-family:var(--mono); font-size:11px; color:#a09c92;
+      word-break:break-all; }
+
+    @media (max-width:520px) {
+      .container { padding:18px 12px; }
+      .card { padding:20px 16px; }
+      h2 { font-size:17px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>GRID</h1><span class="tag">Accounting</span>
+  </div>
+
+  <div class="container">
+    <div class="card">
+      <div class="client">{{ client }}</div>
+      <h2>{{ headline }}</h2>
+      <p class="detail">{{ detail }}</p>
+
+      {% if holder %}<div class="holder">{{ holder }}</div>{% endif %}
+      {% if warn %}<div class="warn">{{ warn }}</div>{% endif %}
+
+      <a class="door" id="door" href="{{ url_for('open_client', path=path, force='1') }}">
+        <span class="key">F3</span>{{ door }}
+      </a>
+
+      <div class="after">
+        <a href="{{ url_for('library') }}">← Back to the library</a>
+        {% if lock_file %}<span class="lockfile">{{ lock_file }}</span>{% endif %}
+      </div>
+    </div>
+  </div>
+
+<script>
+// F3 is "enter / open" everywhere else in Grid, so it is the key here too.
+// The button carries the same door for anyone on a phone or a tablet, which is
+// exactly where a locked file is most painful to sort out.
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'F3' || (e.key === 'Enter' && e.target === document.body)) {
+    e.preventDefault();
+    window.location.href = document.getElementById('door').getAttribute('href');
+  }
+});
+</script>
+</body>
+</html>

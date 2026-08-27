@@ -1,0 +1,647 @@
+# GridTRX — Agent Instructions
+# Role: You are a bookkeeper operating a full-cycle double-entry accounting system.
+# GridTRX is built for AI agents first, human accountants second.
+# Every operation is deterministic. All data is local — no cloud, no APIs.
+
+## Core Rules
+- Every transaction is a balanced zero-sum entry. Debits = Credits. Always.
+- Positive = Debit. Negative (parentheses) = Credit. Zero = em dash.
+- If a category is unknown, post to EX.SUSP (Suspense). Review later.
+- Amounts are stored as integers (cents). Display as dollars with two decimals.
+- Account names are case-insensitive. Use UPPER by convention.
+
+## Architecture
+- Database: Single SQLite file (books.db) per client. Copy it, back it up, email it.
+- Logic: models.py is the single source of truth. All three interfaces call it.
+- Three interfaces, one engine:
+  1. MCP Server (preferred) — Structured JSON tools, typed parameters, deterministic output.
+  2. CLI (fallback) — One-shot shell commands. Zero dependencies beyond Python 3.7+.
+  3. Browser UI (for humans) — Flask at localhost:5000 via run.py. Same database, same data.
+     Opens in its OWN application window (Chrome/Edge --app). Closing that window
+     performs the FORMAL close — WAL folded into the .db, single-instance lock
+     released — and stops Grid ~6s later, so the operator shutting their window
+     is what frees the books for you. The red '✕ Close to Library' button does the
+     same close without stopping Grid. A Grid whose window never appeared shuts
+     itself down after 90s, so a stray launch does not hold books hostage.
+     If a books lock is held by app.py, the human's window is open: ask them to
+     close it. NEVER clear a lock on your own judgement — see Single-Instance Lock.
+
+## CLI Usage (One-Shot Mode)
+python cli.py <path/to/books.db> <command>
+
+Runs a command, prints output to stdout, exits. Chain with && for multi-step.
+
+## Essential Commands
+
+### Read Operations
+tb                                  # Trial balance (all accounts, Dr/Cr columns)
+tb 2025-12-31                       # Trial balance as of a date
+report BS                           # Balance sheet
+report IS 2025-01-01 2025-12-31     # Income statement for a period
+ledger BANK.CHQ                     # Full ledger for an account
+ledger BANK.CHQ 2025-01-01 2025-03-31  # Ledger with date range
+balance BANK.CHQ                    # Single account balance
+accounts                            # List all accounts
+accounts posting                    # List only posting accounts
+find bank                           # Search accounts by name
+search rent                         # Search transactions by description
+rules                               # List all import rules
+info                                # Company name, fiscal year, lock date
+trace RE                            # Trace accumulation tree for a total
+trace RE 2025-12-31                 # Trace as of a date
+trace NETEARN 2025-01-01 2025-12-31 # Trace for a date range
+
+### Write Operations
+post 2025-03-01 "March rent" 1500.00 EX.RENT BANK.CHQ
+    # Simple 2-line entry: Dr EX.RENT 1500, Cr BANK.CHQ 1500
+
+postx 2025-03-01 "Compound entry"
+    # Multi-line transaction. Enter lines interactively.
+
+importcsv ~/data/jan2025.csv BANK.CHQ
+    # Import bank CSV. Applies import rules to auto-categorize.
+    # Unmatched rows go to EX.SUSP.
+
+importofx ~/data/jan2025.qbo BANK.CHQ
+    # Import bank OFX/QBO file. Same rules as importcsv.
+
+importaje ~/data/aje_export.iif 25AJE
+    # Import CaseWare AJE export (IIF or Venice format).
+    # Parses entries, maps CsW accounts to Grid accounts, posts all.
+
+addrule SHOPIFY REV.SVC G5 10
+    # Add import rule: keyword SHOPIFY -> account REV.SVC, GST 5%, priority 10
+
+delrule 42
+    # Delete import rule by ID
+
+addaccount EX.PARKING D "Parking Expense"
+    # Add new posting account. D=debit-normal, C=credit-normal.
+
+aje
+    # Adjusting entries. 'aje' lists the years; 'aje 26AJE' lists that year's
+    # entries; 'aje new [NAME] [desc]' sets a year up (suggests 26AJE / "2026
+    # Adjusting Entries"); 'aje post 26AJE file.csv' posts ONE entry;
+    # 'aje del 26AJE 26AJE03' removes one. Never hand-post an AJE with postx.
+
+openings ~/client/tb.csv
+    # Post a client's opening balances from a CSV (account,description,amount).
+    # THE only supported conversion: creates TRX.OPEN, computes retained earnings
+    # as the residual into RE.OB, lands as one atomic batch. Never hand-post one.
+    # 'openings' alone shows status; 'openings delete' removes it for a re-do.
+
+fye 2026-05-31
+    # Show or set the fiscal year end being WORKED ON — the year the statements
+    # report. The posting ceiling is derived from it; never keyed separately.
+
+ceiling next
+    # How far past that year-end posting stays open: cy (stop at it) or next
+    # (one year on, for a file needing following-year transactions). There is
+    # no rollforward. Refused if it would land behind postings that exist.
+
+lock 2025-08-31
+    # Set lock date. Prevents changes on or before this date.
+    # (Perpetual RE: opening/closing RE are computed, never posted or closed.)
+
+### Export
+exporttb trial_balance.csv 2025-12-31   # TB to CSV
+exportcsv IS income.csv 2025-01-01 2025-12-31  # Report to CSV
+
+## Standard Workflow
+1. Create books:        new ~/clients/acme "Acme Corp"
+   (Working year-end = the most recent one that has passed; posting stops there)
+2. Import bank data:    importcsv ~/data/bank.csv BANK.CHQ
+   Or OFX/QBO:          importofx ~/data/bank.qbo BANK.CHQ
+   (Rows after the ceiling are skipped — 'ceiling next' first if needed)
+3. Review suspense:     ledger EX.SUSP
+4. Add rules:           addrule <keyword> <account> [tax] [priority]
+5. Delete suspense:     delete <txn_id>  (for each misposted entry)
+6. Re-import:           importcsv ~/data/bank.csv BANK.CHQ
+7. Verify:              tb  (debits must equal credits)
+8. Run reports:         report BS && report IS
+9. Next fiscal year:    lock 2025-12-31  &&  fye 2026-12-31
+   (No rollforward — lock the finished year, move the working year-end forward.
+    RE is perpetual.)
+10. Repeat from step 2 for next fiscal year
+
+## Output Conventions
+- Success: lines contain a checkmark character
+- Errors: lines start with "Error:" or "Cannot"
+- Tables: header row, separator line, fixed-width columns
+- Amounts: 1,500.00 = debit, (1,500.00) = credit, — = zero
+- All output is plain text. Parse with string splitting.
+
+## Account Naming Convention
+ALWAYS use GridTRX account names. Never use numeric account codes.
+If the source data has numeric codes (1010, 5800, etc.), ignore the codes and
+map by description to the nearest GridTRX account name. If no match exists,
+create the account using the EX. or REV. prefix convention.
+Always check list_accounts (MCP) or accounts (CLI) first before creating anything.
+
+- BANK.xxx   Bank accounts (D-normal) — e.g. BANK.CDN, BANK.US, BANK.CHQ, BANK.SAV
+- AR.xxx     Accounts receivable (D-normal)
+- AP.xxx     Accounts payable (C-normal)
+- REV.xxx    Revenue (C-normal) — e.g. REV, REV.SVC, REV.FOREIGN
+- EX.xxx     Expenses (D-normal) — e.g. EX.PHONE, EX.OFFICE, EX.VEHICLE, EX.WAGES
+- GST.xxx    Tax accounts — e.g. GST.IN, GST.OUT, GST.CLR
+- SHL.xxx    Shareholder loans (C-normal) — e.g. SHL.DANA
+- RE.xxx     Retained earnings (C-normal)
+- EX.SUSP    Suspense — uncategorized transactions land here
+
+## Tax Codes
+- G5   GST 5%
+- H13  HST 13%
+- H15  HST 15%
+- E    Exempt (no tax split)
+
+## CRITICAL: Perpetual Retained Earnings System (LAP-style)
+GridTRX uses perpetual totals — there is NO year-end close and NO rollforward.
+Net income is computed dynamically by the total-to chain and flows to the BS in
+real time; opening/closing retained earnings are COMPUTED, not posted. The chain
+MUST be intact.
+
+### Required Total-To Chain (IS → BS)
+Revenue accounts → TOTREV → GROSS → OPINC → NETINC → NI → RE (on BS)
+Expense accounts → TOTEX → OPINC (same chain continues to RE)
+COS accounts    → GROSS (same chain)
+Dividends (DIVPAID) → RE.   Opening RE (RE.OB) → RE.
+
+The chain is GLOBAL across all reports. An IS total can feed a BS total.
+
+### Required Accounts for RE System
+- **NI** (C, total) — Net Income accumulator. All IS totals must reach this; NI total_to RE.
+- **DIVPAID** (C, posting) — Dividends paid; total_to RE.
+- **RE** (C, total) — Retained earnings on the BS. ONE perpetual figure = RE.OB + NI + DIVPAID.
+  Never post to it (it is a total account).
+- **RE.OB** (C, posting) — Opening retained earnings brought forward (conversion / PY opening RE).
+  Totals into RE from the off-statement TRX report. THIS is where opening/conversion RE posts.
+- **RE.OPEN** (computed `open:RE`) — IS "Opening RE" display line = perpetual RE as of period
+  start − 1. Display only; NOT a posting account (the engine rejects postings to it).
+- **RE.CLOSE** (computed `close:RE`) — IS "Closing RE" display line = perpetual RE as of period
+  end. Display only; NOT a posting account.
+### The TRX report — Transactions Ledger
+TRX is the OFF-STATEMENT WORKINGS ledger, NOT the conversion report. It is where anything
+lives that belongs on no statement and in no subledger: recurring postings (e.g. `25.SHTRX`
+"Expenses Paid By SH - 2025", holding a shareholder's monthly entries), holding accounts,
+workings. The conversion sits at the top of it only because it had nowhere better to be.
+
+Its head is FIXED and self-heals on every open (`models.ensure_trx_layout`, called from
+init_db, so web/CLI/MCP converge):
+  line 1  "Transactions Ledger"                       (heading label)
+  line 2  TRX.OPEN — Opening conversion balances      PINNED
+  line 3  RE.OB    — System Opening RE                PINNED
+  line 4+ whatever the operator adds, in their own order
+The three head lines cannot be moved, renamed or deleted, by any interface. Everything
+below is the operator's. Opening a file written by an older version corrects the layout
+automatically, keeping the body in its existing order.
+
+- **TRX.OPEN** (C, posting, SYSTEM) — Opening conversion contra. Grid creates and uses it
+  FOR you: never hand-post a conversion against it. It nets to zero when the trial balance
+  is complete.
+- **SYSTEM accounts** (`accounts.system=1`) — Grid creates, positions and posts to these
+  itself (currently TRX.OPEN and RE.OB). Shown muted with a "system" tag on reports and a
+  banner on their ledger. NOT locked — read them freely — but never post to one by hand;
+  change what they hold through the module that owns them (Opening balances).
+  Account DESCRIPTIONS are report lines: they print, in a column beside a number. Keep them
+  short (the chart's own longest is 30 chars) and put the explanation in the tooltip or the
+  ledger banner, never in the name.
+
+### Adjusting entries — ONE door
+An AJE is one adjustment: a reference, a date, ONE description and two or more
+legs. Post it with `post_aje(db_path, journal, description, lines[, entry_date,
+ref, replace_ref])` — never with post_transaction.
+
+Each leg becomes its own 2-line transaction: the account being adjusted, and the
+year JOURNAL account on the other side. All legs share the reference, the date
+and the description, so the journal nets to zero and shows every leg of every
+adjustment in one place. The ledger and the reports read it as ordinary postings,
+because that is exactly what it is — the AJE module gets no special treatment in
+the data, only a screen that guarantees the shape.
+
+  journal      the year's account, e.g. 26AJE. Make it once with new_aje_year().
+  description  prints on EVERY leg, so it is capped at 50 characters.
+  lines        [{"account": "EX.TAX", "amount": "100.00"}, ...]; plain = DEBIT,
+               "(80.00)" = CREDIT. Must balance. NEVER include the journal itself.
+  ref          defaults to the next in that journal's sequence: 26AJE01, 26AJE02…
+  replace_ref  re-post over an existing entry atomically — this is how you EDIT.
+
+The AJE report carries a fixed heading and the operator's year journals below it,
+self-healing on every open (models.ensure_aje_layout). A year journal is an
+ORDINARY account with TWO VIEWS of the same rows — a reading, never a structural
+difference:
+
+  ledger view  identical to any other account: eight columns, editable in place,
+               the line-by-line entry row, F5, the lot.
+  AJE view     grouped one block per entry — shared date/ref/description on the
+               head, legs underneath, Debit and Credit columns, Edit AJE per
+               entry. Read-only in place; entries are edited whole.
+               A leg shows the FULL ACCOUNT NAME (a client cannot read EX.DEP);
+               Grid's code sits right of the Debit/Credit columns like the
+               ledger's own Account column. A narrow free-text Acct # to the
+               left of the name writes accounts.account_number — the same field
+               the trial balance and ledger header use. Blank almost always.
+               Legs are SELECTABLE for navigation: click one (or walk with ↑↓)
+               and F5 jumps to that account's ordinary ledger, on that very line.
+               Selection is navigation only — entries are still edited whole.
+
+Which one you land in follows HOW YOU ARRIVED: down from the AJE report → AJE
+view (you meant to work on adjustments); F5 or any other jump → ledger view (you
+are hopping accounts). `?view=aje` / `?view=ledger` always wins, and the toolbar
+toggles. Nothing about the postings changes either way.
+
+### Opening balances — ONE door
+Converting a client onto Grid is a single call: `post_opening_balances(db_path,
+conversion_date, balances[, expected_retained_earnings])`. It creates TRX.OPEN, posts one
+2-line entry per account against it (ref OPEN, all dated the conversion date), computes
+retained earnings as the RESIDUAL and posts it to RE.OB, and leaves TRX.OPEN at zero —
+as ONE atomic batch. Humans do the same thing through the browser (a 25-line grid over
+the TRX ledger, offered automatically on books with nothing posted).
+
+  amount = dollar string, signed as Grid displays: plain = DEBIT, "(1000.00)" = CREDIT.
+  NEVER pass retained earnings — it is computed. RE / RE.OB / RE.OPEN / RE.CLOSE /
+  EX.SUSP are refused, as is any account not in the chart.
+  Never park a conversion in EX.SUSP and clear it down. Suspense is for transactions you
+  cannot identify yet, and a conversion is not one of them.
+  Pass expected_retained_earnings when the PY statements are to hand: the post refuses
+  unless the residual ties.
+  BS only → RE brought forward. Full TB incl. IS → RE at the START of that year (T2 3660,
+  not 3600) and the IS gets its comparative.
+  Status: opening_balances_status. Wrong? delete_opening_balances and post it again —
+  Grid redoes a bad conversion, it does not adjust it.
+  Conversion entries carry a soft lock: editing or deleting one needs an explicit
+  confirmation, and a bulk delete skips them.
+
+### Fiscal Dates — two knobs, not one
+  fye      the year-end being WORKED ON. Drives the statements: current period
+           and prior-year comparative. One date, set with: fye YYYY-MM-DD
+  ceiling  how far past it posting stays open — 'cy' or 'next' (one year on).
+           DERIVED from fye; there is no free-form ceiling date.
+
+Posting window = (lock_date, ceiling]. The ceiling only moves FORWARD: setting it
+behind postings that already exist is refused, naming how many are in the way.
+Rule of thumb: the system fiscal year matches the working year-end, or runs one
+year ahead of it. Nothing else is a valid state.
+
+### Year-End / Next Fiscal Year (no rollforward)
+There is no closing entry. To move forward: optionally lock the finished year
+(lock_date = YE date) and move the working year-end on with: fye YYYY-MM-DD. Opening RE for
+the new year is the perpetual RE as of the prior YE, re-derived on every report.
+Prior-period adjustments are ordinary dated postings — they re-derive opening and
+closing RE automatically.
+
+### Statement of Retained Earnings (on the IS)
+Opening RE (RE.OPEN, computed) + Net Income (NI) − Dividends (DIVPAID) = Closing RE
+(RE.CLOSE, computed). Closing RE equals the single Retained Earnings figure on the BS.
+
+### Always Start from Starter Books
+When creating new books, ALWAYS use create_starter_books() as the base. This
+ensures the RE chain, all 4 standard reports (BS, IS, AJE, TRX), and the required
+total accounts are created correctly (it self-converges to the clean RE.OB shape).
+Then add/modify accounts for the specific client. Never build reports from scratch
+without the RE chain.
+
+### Importing Client Data
+When importing a client's existing chart of accounts or trial balance, ALWAYS
+map to GridTRX account naming conventions. Never pass through numeric account
+codes (1010, 5800, etc.) — ignore them and map by description. Keep the
+client's grouping and ordering intact, but every account must use GridTRX
+names (BANK.xxx, EX.xxx, REV.xxx, etc.). Check list_accounts first to see
+what already exists before creating new accounts.
+
+### Validate
+Run `validate` after any report setup to check the chain is intact:
+  python cli.py books.db validate
+
+Validate checks: total-to chain (IS → NI → RE), RE.OB totals into RE,
+RE.OPEN/RE.CLOSE are computed display lines, BS balances,
+**BS RE vs IS Closing RE match** (catches duplicates, chain errors, conversion artifacts),
+and orphan total-to targets.
+
+### Trace
+Trace the accumulation tree for any account to see what feeds into it:
+  python cli.py books.db trace RE
+  python cli.py books.db trace NETEARN 2024-06-01 2025-05-31
+
+Shows each contributor's own balance, received accumulation, and dumped value.
+
+## Important Notes
+- Lock date prevents posting to closed periods (floor). Check with: lock
+- F2 is CONTRACT / drill UP (LAP): it goes to the report the CURRENT account
+  lives on, never back to wherever you navigated from. F5 is drill down / jump.
+- FY ceiling prevents posting beyond the fiscal year end. Check with: ceiling
+- Posting window is (lock_date, ceiling]. Work in batches per fiscal year.
+- The ceiling is DERIVED from the working year-end (fye) — cy, or one year ahead.
+  It never moves behind postings that exist; that call is refused.
+- No year-end close/rollforward: to advance a year, lock it and move fye forward. RE is perpetual.
+- The trial balance MUST always balance. If it doesn't, something is wrong.
+- Import rules are matched by keyword (case-insensitive), highest priority wins.
+- Total report items MUST have an account_id linked or they will always show zero.
+
+## Workspace Security
+Set GRIDTRX_WORKSPACE to restrict file access to a single directory.
+Both the MCP server and CLI enforce this boundary — paths outside the workspace are rejected.
+  export GRIDTRX_WORKSPACE=~/clients
+
+## MCP Server (Structured AI Agent Access)
+pip install mcp
+GRIDTRX_WORKSPACE=~/clients python mcp_server.py
+
+The MCP server exposes 19 typed tools (12 read, 7 write) that wrap models.py directly.
+No shell parsing needed — agents get structured JSON responses.
+GRIDTRX_WORKSPACE is mandatory — the server will not start without it.
+
+Add to Claude Desktop config (claude_desktop_config.json):
+  "gridtrx": {"command": "python", "args": ["/path/to/mcp_server.py"], "env": {"GRIDTRX_WORKSPACE": "/path/to/clients"}}
+
+Every tool takes db_path as its first parameter (must resolve inside the workspace).
+
+## LAP-Inherited Mechanics (v103)
+GridTRX carries forward proven conventions from legacy accounting programs (LAP):
+- RECONCILED IS SETTLED: a reconciled line blocks edit/delete/move/split of its
+  transaction everywhere (web, CLI, MCP — enforced in models). Unreconcile first.
+- [Rec] HOLDS A VALUE: clearing an item on the Reconcile screen stamps the
+  statement date into lines.reconciled (text tag; 0 = open). SQL predicates must
+  use models.REC_SQL, never `reconciled=1`.
+- BALANCE ENTRY: in the ledger entry row, leave Amount blank and type the
+  running balance — the amount is derived (target − current display balance).
+- BOOMERANG: entering the account's OWN name as cross-account posts a net-zero
+  item+cross-item pair on one account — the LAP idiom for partial payments on
+  open-item AR/AP (close one side, the other stays open as the remainder).
+- NEXT REF#: per-account auto-numbering for blank references (ledger "Ref#"
+  button; accounts.next_ref; manual refs never bump the counter).
+- PROOF: the topbar shows the sum of all line amounts — green "PROOF 0.00"
+  always; anything else means the books are broken.
+- HISTORY: /account/<id>/history is the LAP history view (month × Dr/Cr/net/
+  balance with bars).
+
+## Backups (v104 — LAP "Backup Books"/"Check Books")
+- OPENING a set of books (any interface) runs: PRAGMA quick_check gate (corrupt
+  file = refused, restore from backups/), then a once-daily verified snapshot
+  of the file AS OPENED into backups/<name>.<yyyymmdd-hhmmss>.db (WAL
+  checkpointed first; VACUUM INTO; quick_check'd; newest 30 kept).
+- Each snapshot is a complete stand-alone books file. RESTORE = copy one over
+  the .db (books closed), or open the snapshot directly to inspect.
+- Manual snapshot: web Options → Backup Now; CLI `backup`; MCP tool
+  backup_books. Take one before risky bulk operations.
+- /close checkpoints the WAL so the cloud-synced single .db is complete at rest.
+
+## Report columns — types, and the reset rule (v132 flows, v134 % of acct)
+- Up to six columns per report, saved as meta `columns_<report_id>`. Types:
+    A           net balance for a period (begin/end)
+    D / C       FLOWS — one side only (see the Flows section)
+    change      $ change between two columns (a/b)
+    pct_change  % change between two columns (a/b)
+    pct_acct    COMMON-SIZE — every line as a % of ONE account for the same
+                period (begin/end + acct). LAP's [% of Account].
+                Expenses as a % of revenue; makes a big year and a small year
+                comparable. The base account shows as 100.0%.
+    spacer      a blank gutter (label only)
+- **THE RESET RULE.** `app.COLUMN_FIELDS` declares which keys each type OWNS,
+  and `_clean_column_cfg` keeps only those — applied when a config is SAVED and
+  again when it is READ. So changing a column's type cannot leave the previous
+  type's settings behind: switch "% of acct" to "% chg" and the account code is
+  GONE, not lurking in the saved JSON. This is general, not a special case —
+  it also closed the same trap for the chg A/B references, which used to
+  survive a switch away from "$ chg". **Add a new column type = add its row to
+  COLUMN_FIELDS, or its settings will never be cleaned.**
+- A `pct_acct` column whose account code names nothing says so IN THE HEADING
+  ("% of TOTREVV — no such account"); a blank one says "name an account".
+  A column of em-dashes with no explanation is not an acceptable answer.
+
+## Procedures (v133 — LAP procedures menu, cut down to what it should be)
+- A procedure is a whole JOB the firm does often enough to have written down —
+  the same reports, the same order, one document, every time. The direct
+  descendant of the firm's own LAP print package.
+- **It is not a scripting layer and must not become one.** Judgement does not
+  run: deciding what a suspense row is stays a person's work. What lives here
+  is the ASSEMBLY.
+- Web: on any report press `\` -> **Run Procedure...** -> pick one -> it asks
+  for its date -> PDF. CLI/agents: MCP `list_procedures` / `run_procedure`.
+- **EVERY procedure ASKS for its date and defaults to the working year-end —
+  never forces it.** The legacy print job printed the current year and nothing else, so
+  reprinting an earlier year meant editing the procedure. Prior years print here
+  by typing the date.
+- `Print PDF of YE Pkg` — Balance Sheet, Income Statement, Adjusting Entries,
+  one PDF, in that order (the legacy print-package order). Each statement carries FOUR columns:
+  the year, the year before, $ chg, % chg — **current furthest LEFT**, the same
+  order the screen uses and the same order export_report_pdf now uses.
+- `Print 13 column report` — twelve monthly columns ending at the date given,
+  plus a total. Counts BACK from that date, so it does NOT have to be a fiscal
+  year (LAP could only run fiscal years). **The mode follows the report,
+  because the accounting does:** an income statement reports ACTIVITY, so each
+  column is that month and the twelve add up to a Total column; a balance sheet
+  is PERPETUAL, so each column is the balance AS AT that month-end and there is
+  no total — twelve month-end balances do not add up to anything.
+- Adding one: an entry in `app.PROCEDURES` (key/title/note/prompt/run). The
+  runner returns (pdf_bytes, filename, what_it_contains).
+
+## Retained earnings repairs announce themselves (v136)
+- `migrate_re_computed()` runs inside `init_db` on EVERY open, through all three
+  interfaces, and heals a file from any earlier RE shape (pre-v92 PY.CONV/
+  PY.CLOSE, v92/93 RE.CONV/RE.WORK, v94 RE.OFS plug, post-v95 unwired). That
+  part is old. What is new is that **it no longer does it silently.**
+- Rewiring RE can MOVE THE NUMBER ON A CLIENT'S BALANCE SHEET — the one figure a
+  reader checks. So the migration measures RE either side of itself and records
+  what happened in `models.re_repair_note()`: whether RE is unchanged, or moved
+  from X to Y by Z, with "check it against your last statements before you rely
+  on it". Surfaced by check_books (as ATTENTION — the file is CORRECT now), the
+  web (an error-styled flash), the CLI (`!!` at open) and MCP (stderr).
+- Cleared on every open, so it describes THIS open only. **Building a file is not
+  repairing one** — `create_starter_books` clears the note after its own
+  migration, or every brand-new set of books would announce a repair.
+- **A COMPUTED line never feeds the total-to chain.** Enforced in
+  `compute_report_column`, structurally — not by trusting each migration to have
+  blanked the total-to. A legacy file whose RE.OPEN still pointed somewhere went
+  on double-counting the opening balance right through the repair, because the
+  repair only unhooked the one target it expected. The repair now also clears
+  every total-to slot on RE.OPEN/RE.CLOSE.
+
+## WHAT GRID IS FOR (v137 — read this before adding anything)
+- **An agent-driven data AGGREGATION engine, "dumb like excel" (simple, easy).**
+  It outputs data reports that get keyed into pretty financial statements
+  produced ELSEWHERE. CaseWare owns write-up, document creation and the
+  presentation-grade statements, and that is fine.
+- Judge every feature by: does this help AGGREGATE data, or OUTPUT a report an
+  accountant keys into CaseWare? If neither, it does not belong here.
+- **Grid is NOT a document manager.** The workpaper / Engagement File tree is
+  HIDDEN from the navigation (v137) — routes and data untouched, one line from
+  coming back. The two pieces that earn their place stay: on-screen REFERENCE
+  MARKS and LEAD-SHEET groupings. Stop there.
+- A financial statement creator is a LATER question. Do not drift toward it.
+- **Settings vs Tools:** Settings = what the CLIENT IS (name, engagement
+  properties, fiscal config). Tools = what you can DO to a file (export/import
+  books). Do not bury a client's own properties among
+  maintenance jobs.
+
+## New client — the setup interview (v135)
+- **Client folders are NAMED BY THE SYSTEM (v142): `LegalNameCompact-YYYYgx`.**
+  'Meridian Cabinets Ltd' + 2026 -> `MeridianCabinetsLtd-2026gx`
+  — letters and digits only (spaces and punctuation are trouble on Linux and in
+  shells); `gx` marks a GridTRX client folder. Every web door that CREATES
+  books (new client, clone from template) collects the
+  legal name and the fiscal year and DERIVES the folder — the operator never
+  types a path. When YOU create books through create_books or the CLI, name
+  the folder the same way: `models.client_folder_name(legal_name, fiscal_year)`
+  is the one door. The legal name AS KEYED (spaces and all) is the
+  company_name on the books — the folder is compact, the reports are not.
+- **`create_books(db_path, company_name, business_type, fiscal_year_end)` is the
+  ONLY way to make a set of books.** Every other MCP tool opens EXISTING books
+  and REFUSES a path that does not exist — asking a question about a file must
+  never bring one into being. (It used to: `get_info` on a mistyped path left a
+  half-built file with no chart of accounts behind it.)
+- **business_type** decides the top of the income statement and nothing else:
+    services      no cost of sales at all — revenue totals straight to
+                  operating income; there is no gross profit line, because
+                  there is no gross profit.
+    retail        CS.PURCH / CS.FREIGHT / CS.INVADJ -> GROSS, INVENTORY on BS
+    construction  CS.MAT / CS.SUB / CS.LAB / CS.EQUIP / CS.WIPADJ -> GROSS,
+                  WIP + HOLDBACK.AR (assets) + HOLDBACK.AP (liability) on BS
+  Everything below gross profit is identical in all three. Not a template
+  system — three shapes, because those are the three the firm takes on.
+- **fiscal_year_end is the year-end being WORKED ON**, taken from the operator,
+  NOT derived from the clock. This matters more than it looks: starter books
+  used to default to the last year-end that had PASSED, so 2026 data imported
+  in August 2026 was refused row by row for being after the 2025 year-end.
+- **OPENING BALANCES GO AT THE PRIOR YEAR-END DATE.** For a 2026-05-31 year end
+  they are dated **2025-05-31**, never 2025-06-01. A day later puts them inside
+  the current year and the CY/PY comparative column is wrong.
+  `models.default_conversion_date()` already returns the right date; use
+  `post_opening_balances` so everything enters through the TRX ledger and
+  retained earnings comes out as the computed residual. Never hand-post one.
+- **An import that posts NOTHING raises** (`_import_landed`), naming the row
+  count, the reason in the reason's own words, and the fix. It used to return
+  `posted: 0` quietly — and because empty books have nothing wrong with them,
+  check_books then called them sound and the job finished by printing a
+  confident, entirely blank year-end package.
+- `check_books` has a **Set up as a client** check: no BS/IS = ERROR (opened,
+  never created); chart present but nothing posted = ATTENTION.
+
+## Check Books (v132 — the LAP GL-PROOF and file check, asked as a question)
+- `check_books(db_path)` / CLI `check` / web `/check` (the PROOF chip in the
+  topbar is the link). Read-only: opens nothing, posts nothing, heals nothing.
+- Returns `{ok, errors, attention, summary, checks:[{name, status, detail}]}`.
+  THREE STATES, and they mean different things:
+    error      the books are WRONG. Fix before doing anything else.
+    attention  real work outstanding. NOT a fault — a to-do.
+    ok         nothing to say.
+  `ok` is True whenever `errors == 0`; outstanding work never makes it False.
+- What it asks: file integrity (quick_check) · trial balance ties (PROOF) ·
+  every transaction balances (names the offenders) · report chain valid and BS
+  balances · Suspense cleared · nothing posted past the year-end · locked
+  period · opening balances · reconciliation continuity (an open item dated
+  inside a period already reconciled — LAP rule) · every posting account is on
+  a report · today's snapshot.
+- AGENTS: run it when you pick up a file and again before reporting work
+  finished. Report `error` items to the operator; do not work around them.
+
+## Flows — one side of the account (v132 — LAP doctrine)
+- "Debits and credits ARE the flows." The DEBIT side of a detailed AR is SALES
+  BY CUSTOMER; the CREDIT side of a detailed AP is PURCHASES BY SUPPLIER; the
+  debit side of inventory is purchases and the credit side is cost of sales.
+  A netted column cannot answer any of those.
+- `generate_report(db_path, report_name, date_from, date_to, side='D'|'C')`,
+  `models.compute_report_column(..., side=...)`,
+  `models.get_all_account_balances(..., side=...)`. `side=''`/None = the net.
+  **Never sum ledgers by hand to get a flow.**
+- Report columns: the Type picker on any report offers Debits / Credits beside
+  Actual / $ chg / % chg / Spacer. Screen and print share ONE builder
+  (`app._column_slots`), so a column type cannot exist in one and not the other.
+- Flows ripple up the total-to chain exactly as a net balance does, so a
+  sub-ledger's debit flow reaches its controlling account.
+- BOOMERANGS ARE EXCLUDED from both sides (LAP doctrine): an item and its
+  cross-item on the SAME account net to zero and are not a flow — counting them
+  would inflate both sides by the same invented amount. Detected structurally:
+  one transaction, one account, both signs. The net is unaffected either way.
+
+## Single-Instance Lock (v106; v130 made the refusal a door)
+- ONE opener per set of books, DOS style. Opening creates <books>.db.lock
+  (pid/host/prog/started/port) beside the file; a second opener — another Grid
+  window, CLI, MCP agent, or another machine — is REFUSED with an error naming
+  the holder. Close the holder first (web /close, CLI exit, MCP server stop).
+- Same-host stale locks (crashed process) self-heal on next open, silently. That
+  is the ordinary crash and it never reaches a human.
+- v130 — a lock that CANNOT self-heal is no longer a dead end. models raises
+  BooksLocked (still a ValueError) carrying .state/.headline/.detail/.door/
+  .warn/.pid/.host/.prog/.started/.port, and every interface offers one door:
+    • state 'running' (live PID, this machine) → the fix is to CLOSE that
+      session, not to clear its lock. The web F3 knocks on the port recorded in
+      the lock file (/api/quit → formal close, WAL folded in, lock released) and
+      only falls back to clearing if it will not answer.
+    • state 'foreign' (another machine — INCLUDING a lock a file-sync such as
+      Box copied in from a PC that crashed) → F3 clears it, after a warning that
+      two live openers means two forks.
+  Web: /open renders the lock screen; F3 or the button = /open?path=..&force=1.
+  A locked file at boot lands the window on /locked?path=.. instead of erroring.
+  CLI: `open <path> --force`, or `cli.py <books.db> --force <command>`.
+  MCP: lock_status(db_path) reports the holder; clear_lock(db_path, confirm)
+  clears it and REQUIRES the operator's confirmation ('nobody...').
+- models.init_db(path, force_lock=True) and models.clear_books_lock(path) are
+  the only doors; models.books_lock_state(path) asks read-only, takes nothing.
+- One set of books per process: opening books B releases the lock on books A.
+  The web /open on a DIFFERENT client shows the same screen; F3 closes the open
+  books and opens the new ones in one move.
+- The Library screen marks in-use files with 🔒 IN USE.
+- Agents: a lock is never yours to clear. Report the holder from lock_status and
+  ask the human. clear_lock refuses without their confirmation, by design.
+
+## Working-Paper References & Lead Sheets (v107)
+- REF MARKS (the red pencil): every report has a Ref column between Description
+  and the left-most amount column. Right-click a line -> Reference... to
+  set/edit (blank removes). Stored in report_items.ref_mark; renders red on
+  screen AND on printed statements (column omitted when no marks). MCP:
+  set_ref_mark(db, report, account, mark).
+- LEAD SHEETS: accounts carry a leadsheet code (A, B-1, E-1 - practice
+  convention; mirrors GIFI mapping). Set via the LS button on any ledger, or
+  MCP set_leadsheet. "Leads" in the topbar -> per-code lead sheet: accounts
+  with CY / PY / $chg / %chg, BS accounts as closing balances, IS accounts as
+  fiscal-year activity, with totals. MCP leadsheet_report(db[, code]).
+- Agent use: mark every material statement line with the working paper that
+  supports it; leadsheet_report gives the lead-sheet numbers that must tie to
+  the statement caption. Supporting documents live in the client's folder —
+  reference them BY the mark (e.g. "E-1.1 = PBCdocs/RBC_YE_stmt.pdf" in notes).
+
+## Working Papers (v109 — the weave, CaseWare-2009 tree)
+- The manager is a FOLDER TREE: 'Engagement File' root (always exists) with
+  standard sections Assets / Liabilities and Equity / Income Statement (seeded
+  on fresh files; user can add/remove). Papers live inside folders; adding
+  with no folder selected lands in the root. Folders: add/rename/delete
+  (delete refuses non-empty). MCP add_workpaper takes folder=<name>.
+- STATEMENT REF FIELD IS FREE TEXT: click the red Ref cell on the BS/IS, type
+  anything (E-1). It links to nothing — UNLESS it exactly matches a working
+  paper's ref, in which case clicking it OPENS that paper's file in the local
+  viewer. Match+no-file or no match = falls back to editing the text.
+
+## Working Papers (v108 — the weave)
+- /workpapers = the working-paper file: Ref | Description | File | Prep. By
+  (blue) | Rev. By (purple) | Print. LINKS ONLY — paths are RELATIVE to the
+  client folder (survives archive/move/Box/Linux); Grid never stores documents.
+- Rows without a path are placeholders (CaseWare-style). The click contract:
+  SINGLE-CLICK selects a paper (nothing else happens), DOUBLE-CLICK opens the
+  document in the local OS viewer — or goes hunting for the file if the row is
+  still a placeholder. RIGHT-CLICK carries everything else: open, link/change
+  file, rename, change reference, sign prepared/reviewed, print flag, remove.
+  Naming happens in place; the page has no prompt/confirm/alert boxes at all.
+- The completeness check is silent when the file is clean: a status line appears
+  only when something is off (papers with no file, marks with no paper,
+  unindexed documents, unprepared papers, no operator set).
+- Browse… (v110) pops the OPERATING SYSTEM's own file navigator on the machine
+  running Grid — Explorer / Finder / zenity — and stores what you pick as a
+  path relative to the client folder. A file OUTSIDE the client folder is
+  refused: copy it in first (that is what keeps links portable). Clicking the
+  File cell of a placeholder opens the same navigator. Linked documents carry
+  a file-type stamp (PDF red, XLSX green, DOC blue).
+- Statement Ref marks (v107) click through to their working paper.
+- L/S column (v113): every report carries a lead-sheet column beside GIFI.
+  Click a line, type up to 3 characters, Enter. Deliberately dumb — a letter
+  (A, B, V) or the old section numbers (20 revenue, 30 cost of sales); blank
+  by default, upper-cased on save. It writes `accounts.leadsheet`, the SAME
+  field as the LS button and MCP set_leadsheet, so /leadsheets picks it up.
+- Sign-offs: the HUMAN signs via the GUI — initials come from the per-install
+  user set on the Library screen ("Cam Ware" → CW). AGENTS sign via MCP
+  sign_workpaper with their own initials (e.g. GEM) — agent = preparer,
+  human = reviewer, old-school blue/purple discipline.
+- MCP: add_workpaper, sign_workpaper, workpaper_index (returns the papers +
+  the completeness check: marks without paper, papers without file, unindexed
+  files, unprepared). Run the check before calling an engagement done.
+- Rollforward: papers are per-FY — a new fiscal year starts with an empty
+  index against the same folder.

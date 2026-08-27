@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}History — {{ account.name }}{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>
+  {% if parent_report %}
+  <a href="/report/{{ parent_report.id }}">{{ parent_report.description or parent_report.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  <a href="/ledger/{{ account.id }}{% if from_report %}?from_report={{ from_report }}{% endif %}">{{ account.name }}</a><span class="sep">▸</span>
+  History
+</div>
+{% endblock %}
+
+{% block content %}
+<style>
+  .hist-hdr { display:flex; align-items:baseline; gap:12px; margin-bottom:10px; }
+  .hist-hdr h1 { font-size:18px; margin:0; }
+  .hist-hdr .sub { color:var(--muted); font-size:12px; }
+  .hist-table { border-collapse:collapse; font-size:12px; font-family:var(--mono); }
+  .hist-table th { text-align:right; padding:3px 10px; font-size:10px; text-transform:uppercase;
+    color:var(--muted); font-weight:600; border-bottom:2px solid var(--border);
+    position:sticky; top:0; background:var(--bg); }
+  .hist-table th:first-child { text-align:left; }
+  .hist-table td { padding:1px 10px; text-align:right; white-space:nowrap; font-variant-numeric:tabular-nums; }
+  .hist-table td:first-child { text-align:left; color:var(--muted); }
+  .hist-table tr.fye td { border-bottom:1px solid var(--border); }
+  .hist-table tr:hover { background:var(--surface-raised); }
+  .hist-table tr.tot td { border-top:2px solid var(--border); font-weight:600; }
+  .zero { color:var(--faint); }
+  .barcell { width:220px; padding:1px 4px !important; }
+  .barwrap { display:flex; align-items:center; height:11px; }
+  .barwrap .half { width:50%; height:7px; position:relative; }
+  .barwrap .half.l .bar { position:absolute; right:0; height:100%; background:#c66; border-radius:1px 0 0 1px; }
+  .barwrap .half.r .bar { position:absolute; left:0; height:100%; background:#5a5; border-radius:0 1px 1px 0; }
+  .barwrap .axis { width:1px; height:11px; background:var(--border); }
+  @media print { .hist-table th { position:static; } }
+</style>
+
+<div class="hist-hdr">
+  <h1>{{ account.name }} — History</h1>
+  <span class="sub">{{ account.description }} · monthly activity, all years on file</span>
+  <span style="flex:1"></span>
+  <a href="/ledger/{{ account.id }}{% if from_report %}?from_report={{ from_report }}{% endif %}" class="btn btn-sm">Ledger</a>
+</div>
+
+{% if not hist %}
+<p style="color:var(--muted);font-size:13px">No transactions on this account yet.</p>
+{% else %}
+<table class="hist-table">
+  <thead><tr>
+    <th>Month</th><th>Debits</th><th>Credits</th><th>Net</th><th>Balance</th>
+    <th style="text-align:center">Net −/+</th>
+  </tr></thead>
+  <tbody>
+  {% for h in hist %}
+    <tr{% if h.fye %} class="fye" title="Fiscal year end"{% endif %}>
+      <td>{{ h.ym }}{% if h.fye %} ◂FYE{% endif %}</td>
+      <td class="{% if not h.dr %}zero{% endif %}">{{ h.dr|money if h.dr else '—' }}</td>
+      <td class="{% if not h.cr %}zero{% endif %}">{{ h.cr|money if h.cr else '—' }}</td>
+      <td class="{% if not h.net %}zero{% endif %}">{{ h.net|money if h.net else '—' }}</td>
+      <td>{{ h.cum|money }}</td>
+      <td class="barcell">
+        <div class="barwrap">
+          <div class="half l">{% if h.net < 0 %}<div class="bar" style="width:{{ (100 * -h.net / max_net)|round(1) }}%"></div>{% endif %}</div>
+          <div class="axis"></div>
+          <div class="half r">{% if h.net > 0 %}<div class="bar" style="width:{{ (100 * h.net / max_net)|round(1) }}%"></div>{% endif %}</div>
+        </div>
+      </td>
+    </tr>
+  {% endfor %}
+    <tr class="tot">
+      <td>Total</td>
+      <td>{{ totals.dr|money }}</td>
+      <td>{{ totals.cr|money }}</td>
+      <td>{{ totals.net|money }}</td>
+      <td>{{ hist[-1].cum|money }}</td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

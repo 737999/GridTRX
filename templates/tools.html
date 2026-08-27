@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Tools{% endblock %}
+{% block content %}
+<style>
+  .tools { max-width: 760px; }
+  .tools h1 { font-size: 15px; font-weight: 700; margin: 0 0 4px; }
+  .tools .lead { color: var(--muted); line-height: 1.6; margin-bottom: 18px; }
+  .tools .opt-sec { border: 1px solid var(--border); padding: 14px 16px;
+                    margin-bottom: 16px; background: var(--surface); }
+  .tools .opt-sec h2 { font-size: 12px; text-transform: uppercase;
+                    letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; }
+  .tools .opt-hint { color: var(--muted); font-size: 12px; line-height: 1.6; }
+  .tools a.tool { display: inline-block; padding: 8px 16px; font-size: 13px;
+                    border: 1px solid var(--border); background: var(--surface-raised);
+                    color: var(--text); text-decoration: none; }
+  .tools a.tool:hover { background: var(--accent-bg); }
+</style>
+<div class="tools">
+  <h1>Tools</h1>
+  <p class="lead">
+    File-level utilities. Nothing here is a property of the client — those live
+    in <a href="{{ url_for('settings') }}">Settings</a>.
+  </p>
+
+<!-- ── 6. Export / Import ── -->
+<div class="opt-sec">
+  <h2>Export / Import Books</h2>
+  <p class="opt-hint" style="margin:0 0 12px">
+    Full backup &amp; restore. Export produces portable JSON files you can import into any Grid database.</p>
+
+  <div style="display:flex;gap:24px;flex-wrap:wrap">
+    <div style="flex:1;min-width:200px">
+      <h3 style="font-size:10px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Export</h3>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <a href="/export/structure" class="btn" style="text-align:center;font-size:12.5px;text-decoration:none;display:block">
+          ⬇ Structure
+          <span style="display:block;font-size:10.5px;color:var(--muted);font-weight:400;margin-top:1px">Accounts, reports, rules, tax codes</span>
+        </a>
+        <a href="/export/data" class="btn" style="text-align:center;font-size:12.5px;text-decoration:none;display:block">
+          ⬇ Data
+          <span style="display:block;font-size:10.5px;color:var(--muted);font-weight:400;margin-top:1px">All transactions &amp; reconciled flags</span>
+        </a>
+        <a href="/export/writeup" class="btn" style="text-align:center;font-size:12.5px;text-decoration:none;display:block">
+          ⬇ Write-up
+          <span style="display:block;font-size:10.5px;color:var(--muted);font-weight:400;margin-top:1px">CY+PY itemized, 5-yr comparatives — for the working-paper program</span>
+        </a>
+      </div>
+    </div>
+
+    <div style="flex:1;min-width:200px">
+      <h3 style="font-size:10px;font-weight:700;margin:0 0 8px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)">Import</h3>
+      <form method="post" action="/import/structure" enctype="multipart/form-data"
+            style="margin-bottom:8px;padding:10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:5px;">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">① Structure (do this first)</label>
+        <input type="file" name="file" accept=".json" style="font-size:12px;width:100%" required>
+        <button type="submit" class="btn" style="margin-top:6px;font-size:12px;width:100%"
+                onclick="return confirm('This will REPLACE all accounts, reports, rules, and tax codes in the current file. Continue?')">
+          ⬆ Import Structure
+        </button>
+      </form>
+      <form method="post" action="/import/data" enctype="multipart/form-data"
+            style="padding:10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:5px;">
+        <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">② Data (after structure is in place)</label>
+        <input type="file" name="file" accept=".json" style="font-size:12px;width:100%" required>
+        <button type="submit" class="btn" style="margin-top:6px;font-size:12px;width:100%"
+                onclick="return confirm('This will import all transactions into the current file. Continue?')">
+          ⬆ Import Data
+        </button>
+      </form>
+    </div>
+  </div>
+
+  <div style="margin-top:12px;padding:8px 10px;background:var(--surface-raised);border:1px solid var(--border-light);border-radius:4px;font-size:11.5px;color:var(--muted)">
+    <strong>How to rebuild from scratch:</strong>
+    1) Export Structure + Data from your current file.
+    2) Install new Grid. Create a fresh blank file via Library → New.
+    3) Open that file, come here, import Structure first, then Data.
+  </div>
+</div>
+
+
+</div>
+{% endblock %}

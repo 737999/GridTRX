@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %}Options{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>Options</div>
+{% endblock %}
+{% block content %}
+<style>
+  .opt-sec { margin-top:14px; padding:12px 14px; background:var(--surface);
+    border:1px solid var(--border); border-radius:6px; max-width:760px; }
+  .opt-sec > h2 { font-size:11px; font-weight:700; text-transform:uppercase;
+    letter-spacing:.6px; color:var(--accent); margin:0 0 10px; padding-bottom:6px;
+    border-bottom:1px solid var(--border-light); }
+  .opt-hint { font-size:11px; color:var(--muted); margin:3px 0 0; }
+  .opt-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr));
+    gap:10px 18px; }
+  .opt-date { font-family:var(--mono); width:130px; }
+  .opt-now { font-family:var(--mono); font-size:15px; font-weight:700; }
+  .opt-choice { display:flex; gap:8px; align-items:flex-start; padding:7px 9px;
+    border:1px solid var(--border-light); border-radius:4px; background:var(--surface-raised);
+    cursor:pointer; margin-bottom:6px; }
+  .opt-choice.sel { border-color:var(--accent); background:var(--accent-bg); }
+  .opt-choice.off { opacity:.5; cursor:not-allowed; }
+  .opt-choice input { width:auto; margin-top:2px; accent-color:var(--accent); }
+  .opt-choice b { font-weight:700; }
+</style>
+
+<h1>Options</h1>
+
+<form method="post">
+
+  <!-- ── 1. Global Options ── -->
+  <div class="opt-sec">
+    <h2>Global Options</h2>
+    <div class="form-group">
+      <label>Company Legal Name</label>
+      <input type="text" name="company_name" value="{{ company }}" style="max-width:420px">
+    </div>
+    <div class="opt-grid">
+      <div class="form-group" style="margin-bottom:0">
+        <label>Fiscal Year End Being Worked On</label>
+        <input type="text" name="working_ye" value="{{ working_ye }}" placeholder="yyyy-mm-dd"
+               class="opt-date">
+        <p class="opt-hint">
+          {% if anchor %}Statements report {{ anchor.cy_start }} to {{ anchor.cy_end }},
+          comparative {{ anchor.py_start }} to {{ anchor.py_end }}.{% else %}Not set.{% endif %}</p>
+      </div>
+      <div class="form-group" style="margin-bottom:0">
+        <label>Lock Date</label>
+        <input type="text" name="lock_date" value="{{ lock_date }}" placeholder="yyyy-mm-dd"
+               class="opt-date">
+        <p class="opt-hint">No postings on or before this date. Blank = no lock.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 2. System Fiscal Year ── -->
+  <div class="opt-sec">
+    <h2>System Fiscal Year Setting</h2>
+    <div style="margin-bottom:10px">
+      <label style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.3px">Posting closes after</label>
+      <div class="opt-now">{{ fy_ceiling or '(not set)' }}</div>
+      <p class="opt-hint">Posting window: {{ lock_date or '(open)' }} to {{ fy_ceiling or '?' }}.
+        Retained earnings rolls automatically — there is no year-end close.</p>
+    </div>
+
+    <label class="opt-choice {% if ceiling_mode == 'cy' %}sel{% endif %} {% if cy_blocked %}off{% endif %}"
+           id="modeCy">
+      <input type="radio" name="fy_ceiling_mode" value="cy"
+             {% if ceiling_mode == 'cy' %}checked{% endif %} {% if cy_blocked %}disabled{% endif %}>
+      <span>
+        <b>Same as the year-end being worked on</b> —
+        <span class="opt-date" style="width:auto">{{ cy_ceiling or '?' }}</span>
+        {% if cy_blocked %}
+        <span style="display:block;color:var(--muted)">Unavailable: {{ cy_blocked_n }}
+          transaction{{ 's' if cy_blocked_n != 1 else '' }} dated after it (latest {{ latest_txn }}).</span>
+        {% endif %}
+      </span>
+    </label>
+
+    <label class="opt-choice {% if ceiling_mode == 'next' %}sel{% endif %}" id="modeNext">
+      <input type="radio" name="fy_ceiling_mode" value="next"
+             {% if ceiling_mode == 'next' %}checked{% endif %}>
+      <span>
+        <b>One year ahead</b> —
+        <span class="opt-date" style="width:auto">{{ next_ceiling or '?' }}</span>
+        <span style="display:block;color:var(--muted)">For a file that needs next-year
+          transactions while this year-end is still being worked on.</span>
+      </span>
+    </label>
+
+    <p class="opt-hint">The system fiscal year only ever moves forward: it will not be set
+      behind postings that already exist.
+      {% if latest_txn %}Latest posting on file: {{ latest_txn }}.{% endif %}</p>
+  </div>
+
+  <!-- ── 3. Sales Tax ── -->
+  <div class="opt-sec">
+    <h2>F8 / F9 — Sales Tax Split</h2>
+    <p class="opt-hint" style="margin:0 0 10px">
+      F8 splits out tax paid on purchases (ITCs). F9 splits out tax collected on sales.</p>
+
+    <div class="opt-grid" style="max-width:500px">
+      <div class="form-group" style="margin-bottom:6px">
+        <label>Tax Rate Numerator</label>
+        <input type="text" name="gst_rate_num" value="{{ gst_rate_num }}" style="font-family:var(--mono);width:60px" placeholder="5">
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label>Tax Rate Denominator</label>
+        <input type="text" name="gst_rate_den" value="{{ gst_rate_den }}" style="font-family:var(--mono);width:60px" placeholder="105">
+      </div>
+    </div>
+    <p class="opt-hint" style="margin:2px 0 12px">
+      Tax = gross &times; {{ gst_rate_num }} / {{ gst_rate_den }}. For 5% GST use 5/105. For 13% HST use 13/113.</p>
+
+    <div class="opt-grid" style="max-width:500px">
+      <div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">F8 — Purchases (ITCs)</div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label>Tax Account</label>
+          <select name="f8_tax_acct" style="font-size:12.5px;width:100%">
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f8_tax_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label>Default Posting Account</label>
+          <select name="f8_post_acct" style="font-size:12.5px;width:100%">
+            <option value="">EX.SUSP (default)</option>
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f8_post_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;margin-bottom:6px">F9 — Sales (Collected)</div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label>Tax Account</label>
+          <select name="f9_tax_acct" style="font-size:12.5px;width:100%">
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f9_tax_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+        <div class="form-group" style="margin-bottom:6px">
+          <label>Default Posting Account</label>
+          <select name="f9_post_acct" style="font-size:12.5px;width:100%">
+            <option value="">EX.SUSP (default)</option>
+            {% for a in accounts %}{% if a.account_type == 'posting' %}
+            <option value="{{ a.name }}" {% if a.name == f9_post_acct %}selected{% endif %}>{{ a.name }}</option>
+            {% endif %}{% endfor %}
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 4. Stripe ── -->
+  <div class="opt-sec">
+    <h2>Stripe Deposit Procedure</h2>
+    <p class="opt-hint" style="margin:0 0 10px">
+      The backslash procedure for posting Stripe deposits. Each charge line creates a compound
+      entry: DR clearing (net), DR fees, CR customer AR (gross).</p>
+    <div class="opt-grid" style="max-width:500px">
+      <div class="form-group" style="margin-bottom:6px">
+        <label>Processing Fee Account</label>
+        <select name="stripe_fee_acct" style="font-size:12.5px;width:100%">
+          {% for a in accounts %}{% if a.account_type == 'posting' %}
+          <option value="{{ a.name }}" {% if a.name == stripe_fee_acct %}selected{% endif %}>{{ a.name }}</option>
+          {% endif %}{% endfor %}
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom:6px">
+        <label>AR Report (for customer list)</label>
+        <select name="stripe_ar_report" style="font-size:12.5px;width:100%">
+          <option value="">— auto-detect —</option>
+          {% for r in reports %}
+          <option value="{{ r.name }}" {% if r.name == stripe_ar_report %}selected{% endif %}>{{ r.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div style="margin-top:14px;max-width:760px"><button type="submit" class="btn btn-primary">Save</button></div>
+</form>
+
+<!-- ── 5. Appearance ── -->
+<div class="opt-sec">
+  <h2>Appearance</h2>
+  <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px">
+    <input type="checkbox" id="darkToggle" onchange="toggleDark(this.checked)"
+      style="width:auto;accent-color:var(--accent)">
+    Dark mode
+  </label>
+</div>
+
+<!-- Book-level utilities moved to the Tools page (v137): they are things you
+     DO to a file, not properties of the client. -->
+<!-- ── 7. About ── -->
+<div class="opt-sec" style="font-size:12.5px;color:var(--muted)">
+  <h2>About Your Books</h2>
+  Database: <code style="font-size:12px">{{ db_path }}</code><br><br>
+  <strong>Backups</strong> — a verified snapshot is taken automatically the first time the books
+  are opened each day, into the <code>backups/</code> folder beside the file
+  (newest {{ backup_keep }} kept; each snapshot is a complete stand-alone books file).<br>
+  {% if backups %}
+  Last snapshot: <code style="font-size:12px">{{ backups[-1].split('/')[-1] }}</code> — {{ backups|length }} on file.<br>
+  {% else %}
+  No snapshots yet.<br>
+  {% endif %}
+  <form method="post" action="{{ url_for('backup_now') }}" style="display:inline">
+    <button type="submit" class="btn btn-sm" style="margin-top:6px">Backup Now</button>
+  </form>
+  <div style="margin-top:6px"><strong>Restore:</strong> close the books, then copy a snapshot from
+  <code>backups/</code> over the .db file (or open the snapshot directly from the Library to inspect it first).
+  Box version history is a second line of defence on the whole folder.</div>
+</div>
+
+<script>
+  const dt = document.getElementById('darkToggle');
+  dt.checked = document.documentElement.classList.contains('dark');
+  function toggleDark(on) {
+    document.documentElement.classList.toggle('dark', on);
+    localStorage.setItem('grid-dark', on ? '1' : '0');
+  }
+  // Highlight the chosen system fiscal year.
+  document.querySelectorAll('.opt-choice input[type=radio]').forEach(function (r) {
+    r.addEventListener('change', function () {
+      document.querySelectorAll('.opt-choice').forEach(function (c) {
+        c.classList.toggle('sel', c.contains(c.querySelector('input:checked')));
+      });
+    });
+  });
+</script>
+{% endblock %}

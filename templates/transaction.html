@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block title %}New Transaction{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>
+  {% if account %}
+  <a href="{{ url_for('account_ledger', account_id=account.id) }}">{{ account.name }}</a><span class="sep">▸</span>
+  {% endif %}
+  New Transaction
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>New Transaction</h1>
+<p class="subtitle">Tab between fields. Enter to post. Accounts auto-complete as you type.</p>
+
+<!-- Mode toggle -->
+<div class="toolbar">
+  <button class="btn" id="btnSimple" onclick="setMode('simple')" style="font-weight:bold">Simple (Dr/Cr)</button>
+  <button class="btn" id="btnDist" onclick="setMode('distribution')">Distribution (multi-line)</button>
+</div>
+
+<form method="post" id="txnForm">
+  <input type="hidden" name="mode" id="modeField" value="simple">
+  {% if account %}
+  <input type="hidden" name="return_to" value="{{ url_for('account_ledger', account_id=account.id) }}">
+  {% endif %}
+  
+  <!-- Header fields -->
+  <div class="form-row" style="margin-bottom: 16px;">
+    <div class="form-group">
+      <label>Date</label>
+      <input type="text" name="date" value="{{ today }}" required autofocus placeholder="yyyy-mm-dd" style="font-family:var(--mono)">
+    </div>
+    <div class="form-group">
+      <label>Reference</label>
+      <input type="text" name="reference" placeholder="Ref #, cheque #, etc.">
+    </div>
+    <div class="form-group" style="grid-column: span 2;">
+      <label>Description</label>
+      <input type="text" name="description" placeholder="What is this transaction for?">
+    </div>
+  </div>
+  
+  <!-- Simple Mode -->
+  <div id="simpleMode">
+    <div class="form-row">
+      <div class="form-group autocomplete-wrapper">
+        <label>Debit Account (receives)</label>
+        <input type="text" name="debit_account" class="acct-autocomplete" 
+               placeholder="Type account name..." 
+               value="{{ account.name if account else '' }}" autocomplete="off">
+      </div>
+      <div class="form-group autocomplete-wrapper">
+        <label>Credit Account (gives)</label>
+        <input type="text" name="credit_account" class="acct-autocomplete"
+               placeholder="Type account name..." autocomplete="off">
+      </div>
+      <div class="form-group">
+        <label>Amount</label>
+        <input type="text" name="amount" class="amount-input" placeholder="0.00" autocomplete="off">
+      </div>
+    </div>
+  </div>
+  
+  <!-- Distribution Mode -->
+  <div id="distMode" style="display:none;">
+    <table id="distTable">
+      <thead>
+        <tr>
+          <th style="width:200px">Account</th>
+          <th>Description</th>
+          <th class="num" style="width:140px">Amount (+Dr / -Cr)</th>
+          <th style="width:40px"></th>
+        </tr>
+      </thead>
+      <tbody id="distLines">
+        <tr>
+          <td class="autocomplete-wrapper">
+            <input type="text" name="line_account[]" class="acct-autocomplete" placeholder="Account" autocomplete="off">
+          </td>
+          <td><input type="text" name="line_desc[]" placeholder="Description"></td>
+          <td><input type="text" name="line_amount[]" class="amount-input" placeholder="0.00" onchange="updateDistTotal()"></td>
+          <td><button type="button" class="btn btn-sm btn-danger" onclick="removeLine(this)">×</button></td>
+        </tr>
+        <tr>
+          <td class="autocomplete-wrapper">
+            <input type="text" name="line_account[]" class="acct-autocomplete" placeholder="Account" autocomplete="off">
+          </td>
+          <td><input type="text" name="line_desc[]" placeholder="Description"></td>
+          <td><input type="text" name="line_amount[]" class="amount-input" placeholder="0.00" onchange="updateDistTotal()"></td>
+          <td><button type="button" class="btn btn-sm btn-danger" onclick="removeLine(this)">×</button></td>
+        </tr>
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="2">
+            <button type="button" class="btn btn-sm" onclick="addLine()">+ Add Line</button>
+          </td>
+          <td class="num" id="distTotal" style="font-weight:bold">0.00</td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+    <p id="distWarning" style="color:var(--negative); font-size:13px; margin-top:8px; display:none;">
+      ⚠ Lines must balance to zero (debits = credits).
+    </p>
+  </div>
+  
+  <div style="margin-top:16px; display:flex; gap:8px;">
+    <button type="submit" class="btn btn-primary">Post Transaction</button>
+    <a href="{{ url_for('account_ledger', account_id=account.id) if account else url_for('home') }}" class="btn">Cancel</a>
+  </div>
+</form>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  function setMode(mode) {
+    document.getElementById('modeField').value = mode;
+    document.getElementById('simpleMode').style.display = mode === 'simple' ? '' : 'none';
+    document.getElementById('distMode').style.display = mode === 'distribution' ? '' : 'none';
+    document.getElementById('btnSimple').style.fontWeight = mode === 'simple' ? 'bold' : '';
+    document.getElementById('btnDist').style.fontWeight = mode === 'distribution' ? 'bold' : '';
+    
+    // Re-init autocomplete for any new inputs
+    document.querySelectorAll('.acct-autocomplete').forEach(setupAutocomplete);
+  }
+  
+  function addLine() {
+    const tbody = document.getElementById('distLines');
+    const row = document.createElement('tr');
+    row.innerHTML = `
+      <td class="autocomplete-wrapper">
+        <input type="text" name="line_account[]" class="acct-autocomplete" placeholder="Account" autocomplete="off">
+      </td>
+      <td><input type="text" name="line_desc[]" placeholder="Description"></td>
+      <td><input type="text" name="line_amount[]" class="amount-input" placeholder="0.00" onchange="updateDistTotal()"></td>
+      <td><button type="button" class="btn btn-sm btn-danger" onclick="removeLine(this)">×</button></td>
+    `;
+    tbody.appendChild(row);
+    // Init autocomplete on new row
+    row.querySelectorAll('.acct-autocomplete').forEach(setupAutocomplete);
+    row.querySelector('input').focus();
+  }
+  
+  function removeLine(btn) {
+    const tbody = document.getElementById('distLines');
+    if (tbody.children.length > 2) {
+      btn.closest('tr').remove();
+      updateDistTotal();
+    }
+  }
+  
+  function parseAmountForTotal(s) {
+    s = s.trim().replace(/,/g, '').replace('$', '');
+    if (!s) return 0;
+    let neg = false;
+    if (s.startsWith('(') && s.endsWith(')')) { neg = true; s = s.slice(1, -1); }
+    if (s.startsWith('-')) { neg = true; s = s.slice(1); }
+    let val = parseFloat(s) || 0;
+    return neg ? -val : val;
+  }
+  
+  function updateDistTotal() {
+    const amounts = document.querySelectorAll('#distLines input[name="line_amount[]"]');
+    let total = 0;
+    amounts.forEach(input => { total += parseAmountForTotal(input.value); });
+    
+    const el = document.getElementById('distTotal');
+    const warn = document.getElementById('distWarning');
+    el.textContent = total.toFixed(2);
+    el.style.color = Math.abs(total) < 0.005 ? 'var(--positive)' : 'var(--negative)';
+    warn.style.display = Math.abs(total) < 0.005 ? 'none' : '';
+  }
+</script>
+{% endblock %}

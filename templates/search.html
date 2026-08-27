@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Search{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>Search
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>Find Transactions</h1>
+
+<form method="get" style="margin-bottom:16px;">
+  <div style="display:flex; gap:8px;">
+    <input type="text" name="q" value="{{ query }}" placeholder="Search by description, reference, or account name..." 
+           style="flex:1" autofocus>
+    <button type="submit" class="btn btn-primary">Search</button>
+  </div>
+</form>
+
+{% if query %}
+<p class="subtitle">{{ results|length }} result{{ 's' if results|length != 1 }} for "{{ query }}"</p>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width:95px">Date</th>
+      <th style="width:70px">Ref</th>
+      <th>Description</th>
+      <th>Accounts</th>
+      <th class="num" style="width:120px">Amount</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in results %}
+    <tr class="clickable" data-href="{{ url_for('edit_transaction', txn_id=r.txn_id) }}"
+        onclick="window.location=this.dataset.href">
+      <td style="font-family:var(--mono); font-size:12px">{{ r.date }}</td>
+      <td style="font-size:12px">{{ r.reference }}</td>
+      <td>{{ r.description }}</td>
+      <td style="font-size:12px">{{ r.accounts }}</td>
+      <td class="num">{{ r.total_amount|money }}</td>
+    </tr>
+    {% endfor %}
+    {% if not results %}
+    <tr>
+      <td colspan="5" style="text-align:center; padding:20px; color:var(--text-muted);">
+        No transactions found.
+      </td>
+    </tr>
+    {% endif %}
+  </tbody>
+</table>
+{% endif %}
+{% endblock %}

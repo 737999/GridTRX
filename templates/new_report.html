@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}New Report{% endblock %}
+
+{% block breadcrumb %}
+<div class="breadcrumb">
+  <a href="/">Home</a><span class="sep">▸</span>New Report
+</div>
+{% endblock %}
+
+{% block content %}
+<h1>New Report</h1>
+<p class="subtitle">Reports group accounts — like Balance Sheet, Income Statement, etc.</p>
+
+<form method="post" style="max-width:500px;">
+  <div class="form-group">
+    <label>Report Name</label>
+    <input type="text" name="name" placeholder="e.g. Balance Sheet" required autofocus>
+  </div>
+  <div class="form-group">
+    <label>Description</label>
+    <input type="text" name="description" placeholder="e.g. Statement of Financial Position">
+  </div>
+  <div style="margin-top:16px; display:flex; gap:8px;">
+    <button type="submit" class="btn btn-primary">Create Report</button>
+    <a href="/" class="btn">Cancel</a>
+  </div>
+</form>
+{% endblock %}

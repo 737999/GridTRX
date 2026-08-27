@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}New Adjusting Entries{% endblock %}
+{% block breadcrumb %}
+<div class="breadcrumb"><a href="/">Home</a><span class="sep">▸</span>Adjusting Entries<span class="sep">▸</span>New year</div>
+{% endblock %}
+{% block content %}
+<style>
+  .aje-card { max-width:520px; background:var(--surface); border:1px solid var(--border);
+    border-radius:6px; padding:14px 16px; margin-top:10px; }
+  .aje-card h2 { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.6px;
+    color:var(--accent); margin:0 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border-light); }
+  .aje-hint { font-size:11px; color:var(--muted); margin:3px 0 0; }
+  .aje-have { margin-top:14px; max-width:520px; font-size:12px; }
+  .aje-have a { color:var(--accent); text-decoration:none; }
+  .aje-have a:hover { text-decoration:underline; }
+</style>
+
+<h1>New Year of Adjusting Entries</h1>
+<p class="subtitle">Sets up the account this year's adjustments post against.</p>
+
+<form method="post" class="aje-card">
+  <h2>Name it</h2>
+  <div class="form-group">
+    <label>What do you want to call these entries?</label>
+    <input type="text" name="description" value="{{ suggest.description }}" maxlength="40"
+           id="d" autofocus style="max-width:320px">
+    <p class="aje-hint">This is what prints on the AJE report.</p>
+  </div>
+  <div class="form-group" style="margin-bottom:4px">
+    <label>Account name</label>
+    <input type="text" name="account_name" value="{{ suggest.account }}" maxlength="20"
+           style="font-family:var(--mono);width:130px;text-transform:uppercase">
+    <p class="aje-hint">Both are suggestions — change either one.</p>
+  </div>
+  <div style="margin-top:12px;display:flex;gap:6px">
+    <button type="submit" class="btn btn-primary">Go</button>
+    <a href="/report/{{ g.rpt_aje }}" class="btn">Cancel</a>
+  </div>
+</form>
+
+{% if journals %}
+<div class="aje-have">
+  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.3px;color:var(--muted);margin-bottom:4px">Already on file</div>
+  {% for j in journals %}
+  <div><a href="{{ url_for('account_ledger', account_id=j.id) }}">{{ j.description or j.name }}</a>
+    <span style="color:var(--muted);font-family:var(--mono);font-size:11px">{{ j.name }}</span></div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<script>
+  // Enter in either field submits — nothing else on this screen to reach.
+  document.querySelectorAll('input').forEach(i => i.addEventListener('keydown', e => {
+    if (e.key === 'Escape') { e.preventDefault(); history.back(); }
+  }));
+</script>
+{% endblock %}

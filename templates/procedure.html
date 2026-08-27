@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ proc.title }}{% endblock %}
+{% block content %}
+<style>
+  .pr { max-width: 460px; }
+  .pr h1 { font-size: 15px; font-weight: 700; margin: 0 0 6px; }
+  .pr .note { color: var(--muted); line-height: 1.55; margin-bottom: 18px; }
+  .pr label { display: block; font-size: 11px; text-transform: uppercase;
+              letter-spacing: .6px; color: var(--muted); margin-bottom: 4px; }
+  .pr input[type=text], .pr select {
+      width: 100%; padding: 7px 9px; font-family: var(--mono); font-size: 13px;
+      border: 1px solid var(--border); background: var(--surface);
+      color: var(--text); margin-bottom: 14px; }
+  .pr .go { padding: 9px 18px; font-family: var(--sans); font-size: 13px;
+            font-weight: 600; border: none; background: var(--accent);
+            color: #fff; cursor: pointer; }
+  .pr .back { margin-left: 14px; color: var(--accent); font-size: 12px; }
+</style>
+<div class="pr">
+  <h1>{{ proc.title }}</h1>
+  <p class="note">{{ proc.note }}</p>
+  <form method="post">
+    {% if proc.report_choice %}
+    <label for="report_name">Report</label>
+    <select name="report_name" id="report_name">
+      {% for r in reports %}<option value="{{ r.name }}">{{ r.description or r.name }}</option>{% endfor %}
+    </select>
+    {% endif %}
+    <label for="as_of">{{ proc.prompt }}</label>
+    <input type="text" name="as_of" id="as_of" value="{{ default }}" autofocus
+           autocomplete="off" spellcheck="false">
+    <button class="go" type="submit">Print</button>
+    <a class="back" href="{{ url_for('home') }}">Cancel</a>
+  </form>
+</div>
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+  const f = document.getElementById('as_of');
+  if (f) { f.focus(); f.select(); }   // the date is the one thing to change
+});
+</script>
+{% endblock %}
