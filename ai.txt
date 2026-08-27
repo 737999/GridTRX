@@ -11,7 +11,7 @@
 - Account names are case-insensitive. Use UPPER by convention.
 
 ## Architecture
-- Database: Single SQLite file (books.db) per client. Copy it, back it up, email it.
+- Database: Single SQLite file (books.db) per client. Copy it, back it up. It is confidential client financial data — never transmit it anywhere without the user's explicit OK.
 - Logic: models.py is the single source of truth. All three interfaces call it.
 - Three interfaces, one engine:
   1. MCP Server (preferred) — Structured JSON tools, typed parameters, deterministic output.

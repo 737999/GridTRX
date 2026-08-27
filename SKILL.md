@@ -22,7 +22,9 @@ metadata:
 
 ## What it does
 
-Use this skill when the user asks you to "do the books," "categorize expenses," "import bank transactions," "run a balance sheet," or any bookkeeping task. GridTRX is a full-cycle double-entry accounting engine. You prompt in plain English, and the agent completes the books correctly. Every transaction balances. Every amount is deterministic. All data is local — no cloud services, no external APIs.
+Use this skill when the user explicitly asks for bookkeeping work — "do the books," "categorize expenses," "import bank transactions," "run a balance sheet." Do not activate on casual mentions of money or finances, and confirm with the user before creating books or writing to existing ones. GridTRX is a full-cycle double-entry accounting engine. You prompt in plain English, and the agent completes the books correctly.
+
+**Destructive operations — confirm first.** Before deleting transactions, re-importing, changing the lock date, or rewriting report layouts, tell the user exactly what you are about to do and get their OK. The engine has its own guardrails — deletions respect the lock date, every import is tagged as one batch, and each book is snapshotted daily on first open — but the agent's habit is still: state the action, confirm, then act. Every transaction balances. Every amount is deterministic. All data is local — no cloud services, no external APIs.
 
 GridTRX produces a full set of auditable books: balance sheet, income statement, general ledger, trial balance, adjusting journal entries, and a perpetual retained-earnings statement. Reports are exportable to CSV and PDF for any time period.
 
@@ -84,7 +86,7 @@ Runs one command, prints plain text to stdout, exits. When `GRIDTRX_WORKSPACE` i
 - **EX.SUSP (Suspense):** Where unrecognized transactions land. This is the triage queue. Tell the AI what the suspense items are and it will clear them. Or clear them yourself through the GUI.
 - **Import rules:** Keyword → account mappings. Case-insensitive match, highest priority wins. Optional tax code splits the amount into net + tax automatically.
 - **Lock date:** Prevents changes to closed periods. Check before importing historical data.
-- **Architecture:** Each client is one SQLite file. Copy it, back it up, email it. One data layer (`models.py`) — CLI, MCP server, and browser UI all call the same functions.
+- **Architecture:** Each client is one SQLite file. Copy it, back it up. It is confidential financial data — do not transmit it without the user's explicit approval. One data layer (`models.py`) — CLI, MCP server, and browser UI all call the same functions.
 
 ## Workflow
 
@@ -216,7 +218,7 @@ Tax code is optional. Common codes: `G5` (GST 5%), `H13` (HST 13%), `H15` (HST 1
 
 ### Step 5: Clear the bad suspense entries and re-import
 
-Delete each suspense transaction, then re-import so the new rules apply:
+Show the user the list of suspense transactions you intend to replace and get their OK. Then delete them and re-import so the new rules apply:
 
 **MCP:** `delete_transaction(db_path, txn_id)` for each, then `import_csv(...)` or `import_ofx(...)` again.
 **CLI:** `python cli.py /path/to/books.db delete <txn_id>` for each, then re-run the import command.
@@ -279,11 +281,11 @@ No rollforward — RE is perpetual and re-derives opening/closing for every year
 If the user uploaded the wrong file or you imported against the wrong account:
 
 1. **Find the bad transactions:** `search_transactions(db_path, "some description")` or via CLI `search <keyword>`.
-2. **Delete them one by one:** `delete_transaction(db_path, txn_id)` or CLI `delete <txn_id>`.
+2. **Confirm the matched list with the user**, then delete them one by one: `delete_transaction(db_path, txn_id)` or CLI `delete <txn_id>`.
 3. **Verify the trial balance** still balances after cleanup.
 4. **Re-import** the correct file.
 
-There is no bulk undo. Deletions are individual and respect the lock date — you cannot delete transactions in a locked period.
+From MCP/CLI, deletions are individual and respect the lock date — you cannot delete transactions in a locked period. Every import is tagged as one batch, and the browser UI can undo a whole import in one step; a bad import is cured by deleting it whole, never by unpicking part of it.
 
 ## MCP tools reference (selected)
 

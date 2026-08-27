@@ -36,10 +36,12 @@ GridTRX was built by a cross-border tax CPA practitioner who does dual-citizen a
 - Sales tax code support (GST/HST with automatic net + tax splitting)
 
 **Architecture**
-- Each client is one SQLite file. Copy it, back it up, email it.
+- Each client is one SQLite file. Copy it, back it up. Treat it as what it is — confidential financial records. Don't transmit it over channels the client hasn't approved.
 - Amounts stored as integers (cents). No floating-point rounding.
 - Every transaction balances. Sum of all lines = 0. Always.
 - One data layer (`models.py`) — CLI, MCP server, and browser UI all call the same functions.
+
+**Agent safety:** destructive commands respect the lock date, every import is tagged as a single batch (undoable whole in the browser UI), and each book is snapshotted daily on first open. Agents are instructed (SKILL.md) to confirm with their human before deleting, re-importing, or changing lock dates.
 
 ## How It Works
 
